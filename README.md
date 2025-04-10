@@ -113,7 +113,7 @@ volumes:
 ### 常见问题
 1. **TDL 无法执行**  
    - 确保宿主机 `tdl` 已安装且路径正确
-   - 检查权限：`chmod +x /usr/local/bin/tdl`
+   - 检查权限：`chmod +x /usr/local/bin/tdl`     chmod -R 755 ~/.tdl
 
 2. **文件下载失败**  
    - 检查磁盘空间：`df -h`
@@ -125,18 +125,14 @@ volumes:
 ## 📜 许可证
 本项目采用 [MIT License](LICENSE)
 
----
-```
 
 
 # 补充
 如果遇到 tdl 命令无法执行的问题，可以检查：
 容器内 tdl 的权限：
-Apply to docker-compo...
-Run
+
 docker-compose exec telegram-bot ls -l /usr/local/bin/tdl
 确认挂载成功：
-Apply to docker-compo...
-Run
+
 docker-compose exec telegram-bot which tdl
-你现在的配置是完全正确的，不需要做任何修改。
+
