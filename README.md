@@ -137,3 +137,5 @@ volumes:
 
 `docker-compose exec telegram-bot which tdl`
 
+- 寻求claude deepseek cursor等支持
+
