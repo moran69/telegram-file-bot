@@ -128,19 +128,15 @@ volumes:
 ---
 ```
 
-### 关键亮点说明：
-1. **徽章系统** - 使用 shields.io 显示项目状态
-2. **分层结构** - 从部署到调试完整覆盖
-3. **表格化命令** - 管理员指令清晰展示
-4. **故障排查** - 常见问题快速解决方案
-5. **响应式设计** - 在 GitHub/GitLab 上显示美观
 
-### 进阶建议：
-1. 如果需要更专业的文档：
-   - 添加 `CHANGELOG.md` 记录版本更新
-   - 创建 `CONTRIBUTING.md` 说明贡献指南
-2. 对于企业级项目：
-   - 添加 CI/CD 状态徽章
-   - 补充架构图（可放 `docs/` 目录）
-
-这个 README 既适合开发者快速部署，也方便终端用户理解功能，同时满足开源项目的最佳实践要求。
+# 补充
+如果遇到 tdl 命令无法执行的问题，可以检查：
+容器内 tdl 的权限：
+Apply to docker-compo...
+Run
+docker-compose exec telegram-bot ls -l /usr/local/bin/tdl
+确认挂载成功：
+Apply to docker-compo...
+Run
+docker-compose exec telegram-bot which tdl
+你现在的配置是完全正确的，不需要做任何修改。
