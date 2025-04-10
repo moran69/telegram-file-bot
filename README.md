@@ -1,8 +1,5 @@
-以下是一个 **详细且专业的 README.md** 模板，适用于你的 Telegram 文件下载机器人项目。将此内容保存为 `README.md` 文件并放在项目根目录：
 
----
 
-```markdown
 # 📥 Telegram 文件下载机器人 (Docker + TDL)
 
 ![Docker](https://img.shields.io/badge/Docker-支持-blue?logo=docker)
