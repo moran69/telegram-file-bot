@@ -130,10 +130,10 @@ volumes:
 
 # 补充
 如果遇到 tdl 命令无法执行的问题，可以检查：
-容器内 tdl 的权限：
+- 容器内 tdl 的权限
 
-docker-compose exec telegram-bot ls -l /usr/local/bin/tdl
-确认挂载成功：
+`docker-compose exec telegram-bot ls -l /usr/local/bin/tdl`
+- 确认挂载成功：
 
-docker-compose exec telegram-bot which tdl
+`docker-compose exec telegram-bot which tdl`
 
