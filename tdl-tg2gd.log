@@ -1,0 +1,486 @@
+nohup: ignoring input
+2025-04-06 12:07:30,076 - INFO - Sent startup message to admin 1227176277
+2025-04-06 12:07:30,078 - INFO - Bot started with TDL integration...
+2025-04-06 12:08:16,585 - INFO - 开始处理文件消息: message_id=529, chat_id=1227176277
+2025-04-06 12:08:16,585 - INFO - 原始文件名: 推特 依依 (109).mp4, 文件类型: mp4
+2025-04-06 12:08:16,585 - INFO - 使用原始文件名: 推特 依依 (109).mp4
+2025-04-06 12:08:16,585 - INFO - 文件保存路径: /google/tg2google/downloads/推特 依依 (109).mp4
+2025-04-06 12:08:16,585 - INFO - 检测到转发消息
+2025-04-06 12:08:16,585 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-06 12:08:16,586 - INFO - 频道消息: channel_id=2490567130, message_id=23303
+2025-04-06 12:08:16,661 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-06 12:08:16,661 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23303
+2025-04-06 12:08:16,661 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23303
+2025-04-06 12:08:16,751 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23303 -d /google/tg2google/downloads --template 推特 依依 (109).mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-06 12:08:17,670 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-06 12:08:17,671 - INFO - 文件在预期位置: /google/tg2google/downloads/推特 依依 (109).mp4
+2025-04-06 12:08:17,672 - INFO - 文件下载完成，大小: 126.1 MB
+2025-04-06 12:08:17,675 - INFO - 成功保存历史记录，记录条数: 43
+2025-04-06 12:08:17,675 - INFO - 添加到下载历史，记录ID: 43
+2025-04-06 12:08:17,772 - INFO - 文件处理完成，总用时: 1.1秒, 平均速度: 110.6 MB/s
+2025-04-06 12:08:17,773 - INFO - 更新统计信息: size=126101706, success=True
+2025-04-06 12:08:17,875 - INFO - 已发送最终确认消息
+2025-04-06 13:11:56,094 - INFO - 开始处理文件消息: message_id=534, chat_id=1227176277
+2025-04-06 13:11:56,097 - INFO - 原始文件名: 3e322d45530465c14f26b86dce9ec366_out_5550212363_233760.mp4, 文件类型: mp4
+2025-04-06 13:11:56,098 - INFO - 使用原始文件名: 3e322d45530465c14f26b86dce9ec366_out_5550212363_233760.mp4
+2025-04-06 13:11:56,098 - INFO - 文件保存路径: /google/tg2google/downloads/3e322d45530465c14f26b86dce9ec366_out_5550212363_233760.mp4
+2025-04-06 13:11:56,098 - INFO - 检测到转发消息
+2025-04-06 13:11:56,098 - INFO - 转发来源ID: PeerChannel(channel_id=1924130470)
+2025-04-06 13:11:56,098 - INFO - 频道消息: channel_id=1924130470, message_id=26664
+2025-04-06 13:11:56,219 - INFO - 获取频道实体: Channel(id=1924130470, title='热门精品AV', photo=ChatPhoto(photo_id=6258179530149705969, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 6, 9, 21, 59, 35, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-2259100792667109521, username='xoatv', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-06 13:11:56,219 - INFO - 构建公开频道链接: https://t.me/xoatv/26664
+2025-04-06 13:11:56,220 - INFO - 开始下载文件，链接: https://t.me/xoatv/26664
+2025-04-06 13:11:57,020 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/xoatv/26664 -d /google/tg2google/downloads --template 3e322d45530465c14f26b86dce9ec366_out_5550212363_233760.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-06 13:12:11,462 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-06 13:12:11,467 - INFO - 文件在预期位置: /google/tg2google/downloads/3e322d45530465c14f26b86dce9ec366_out_5550212363_233760.mp4
+2025-04-06 13:12:11,470 - INFO - 文件下载完成，大小: 45.8 MB
+2025-04-06 13:12:11,474 - INFO - 成功保存历史记录，记录条数: 44
+2025-04-06 13:12:11,475 - INFO - 添加到下载历史，记录ID: 44
+2025-04-06 13:12:11,571 - INFO - 文件处理完成，总用时: 15.4秒, 平均速度: 2.8 MB/s
+2025-04-06 13:12:11,574 - INFO - 更新统计信息: size=45806209, success=True
+2025-04-06 13:12:11,691 - INFO - 已发送最终确认消息
+2025-04-06 13:21:36,056 - INFO - 开始处理文件消息: message_id=537, chat_id=1227176277
+2025-04-06 13:21:36,056 - INFO - 原始文件名: ec8988a1d6c709bd0f5af5549ed8f80a_out_5550212363_233761.mp4, 文件类型: mp4
+2025-04-06 13:21:36,057 - INFO - 使用原始文件名: ec8988a1d6c709bd0f5af5549ed8f80a_out_5550212363_233761.mp4
+2025-04-06 13:21:36,057 - INFO - 文件保存路径: /google/tg2google/downloads/ec8988a1d6c709bd0f5af5549ed8f80a_out_5550212363_233761.mp4
+2025-04-06 13:21:36,057 - INFO - 检测到转发消息
+2025-04-06 13:21:36,057 - INFO - 转发来源ID: PeerChannel(channel_id=1924130470)
+2025-04-06 13:21:36,057 - INFO - 频道消息: channel_id=1924130470, message_id=26665
+2025-04-06 13:21:36,133 - INFO - 获取频道实体: Channel(id=1924130470, title='热门精品AV', photo=ChatPhoto(photo_id=6258179530149705969, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 6, 9, 21, 59, 35, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-2259100792667109521, username='xoatv', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-06 13:21:36,133 - INFO - 构建公开频道链接: https://t.me/xoatv/26665
+2025-04-06 13:21:36,133 - INFO - 开始下载文件，链接: https://t.me/xoatv/26665
+2025-04-06 13:21:36,799 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/xoatv/26665 -d /google/tg2google/downloads --template ec8988a1d6c709bd0f5af5549ed8f80a_out_5550212363_233761.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-06 13:22:01,283 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-06 13:22:01,285 - INFO - 文件在预期位置: /google/tg2google/downloads/ec8988a1d6c709bd0f5af5549ed8f80a_out_5550212363_233761.mp4
+2025-04-06 13:22:01,286 - INFO - 文件下载完成，大小: 107.0 MB
+2025-04-06 13:22:01,288 - INFO - 成功保存历史记录，记录条数: 45
+2025-04-06 13:22:01,289 - INFO - 添加到下载历史，记录ID: 45
+2025-04-06 13:22:01,419 - INFO - 文件处理完成，总用时: 25.2秒, 平均速度: 4.0 MB/s
+2025-04-06 13:22:01,420 - INFO - 更新统计信息: size=106986351, success=True
+2025-04-06 13:22:01,531 - INFO - 已发送最终确认消息
+2025-04-06 13:33:18,933 - INFO - 开始处理文件消息: message_id=180, chat_id=-1002464921647
+2025-04-06 13:33:18,934 - INFO - 原始文件名: 7dea2d7ce160a3677bf11b9cb87f07e1_out_5550212363_233763.mp4, 文件类型: mp4
+2025-04-06 13:33:18,935 - INFO - 使用原始文件名: 7dea2d7ce160a3677bf11b9cb87f07e1_out_5550212363_233763.mp4
+2025-04-06 13:33:18,935 - INFO - 文件保存路径: /google/tg2google/downloads/7dea2d7ce160a3677bf11b9cb87f07e1_out_5550212363_233763.mp4
+2025-04-06 13:33:18,935 - INFO - 检测到转发消息
+2025-04-06 13:33:18,936 - INFO - 转发来源ID: PeerChannel(channel_id=1924130470)
+2025-04-06 13:33:18,936 - INFO - 频道消息: channel_id=1924130470, message_id=26667
+2025-04-06 13:33:19,015 - INFO - 获取频道实体: Channel(id=1924130470, title='热门精品AV', photo=ChatPhoto(photo_id=6258179530149705969, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 6, 9, 21, 59, 35, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-2259100792667109521, username='xoatv', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-06 13:33:19,016 - INFO - 构建公开频道链接: https://t.me/xoatv/26667
+2025-04-06 13:33:19,016 - INFO - 开始下载文件，链接: https://t.me/xoatv/26667
+2025-04-06 13:33:19,810 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/xoatv/26667 -d /google/tg2google/downloads --template 7dea2d7ce160a3677bf11b9cb87f07e1_out_5550212363_233763.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-06 13:34:06,726 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-06 13:34:06,729 - INFO - 文件在预期位置: /google/tg2google/downloads/7dea2d7ce160a3677bf11b9cb87f07e1_out_5550212363_233763.mp4
+2025-04-06 13:34:06,731 - INFO - 文件下载完成，大小: 237.9 MB
+2025-04-06 13:34:06,736 - INFO - 成功保存历史记录，记录条数: 46
+2025-04-06 13:34:06,737 - INFO - 添加到下载历史，记录ID: 46
+2025-04-06 13:34:06,875 - INFO - 文件处理完成，总用时: 47.8秒, 平均速度: 4.7 MB/s
+2025-04-06 13:34:06,875 - INFO - 更新统计信息: size=237897896, success=True
+2025-04-06 13:34:07,003 - INFO - 已发送最终确认消息
+2025-04-06 13:36:19,346 - INFO - 开始处理文件消息: message_id=540, chat_id=1227176277
+2025-04-06 13:36:19,347 - INFO - 原始文件名: 2月10日(1).mp4, 文件类型: mp4
+2025-04-06 13:36:19,348 - INFO - 使用原始文件名: 2月10日(1).mp4
+2025-04-06 13:36:19,349 - INFO - 文件保存路径: /google/tg2google/downloads/2月10日(1).mp4
+2025-04-06 13:36:19,349 - INFO - 检测到转发消息
+2025-04-06 13:36:19,349 - INFO - 转发来源ID: PeerChannel(channel_id=2382883951)
+2025-04-06 13:36:19,349 - INFO - 频道消息: channel_id=2382883951, message_id=334
+2025-04-06 13:36:19,454 - INFO - 获取频道实体: Channel(id=2382883951, title='oke集合社', photo=ChatPhoto(photo_id=6210706384748659602, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 25, 3, 59, 24, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=5928569676262722715, username='doai147', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-06 13:36:19,454 - INFO - 构建公开频道链接: https://t.me/doai147/334
+2025-04-06 13:36:19,455 - INFO - 开始下载文件，链接: https://t.me/doai147/334
+2025-04-06 13:36:19,561 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/doai147/334 -d /google/tg2google/downloads --template 2月10日(1).mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-06 13:36:22,529 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-06 13:36:22,531 - INFO - 文件在预期位置: /google/tg2google/downloads/2月10日(1).mp4
+2025-04-06 13:36:22,532 - INFO - 文件下载完成，大小: 30.7 MB
+2025-04-06 13:36:22,536 - INFO - 成功保存历史记录，记录条数: 47
+2025-04-06 13:36:22,537 - INFO - 添加到下载历史，记录ID: 47
+2025-04-06 13:36:22,633 - INFO - 文件处理完成，总用时: 3.2秒, 平均速度: 9.2 MB/s
+2025-04-06 13:36:22,635 - INFO - 更新统计信息: size=30736260, success=True
+2025-04-06 13:36:22,744 - INFO - 已发送最终确认消息
+2025-04-07 00:21:44,354 - INFO - 开始处理文件消息: message_id=543, chat_id=1227176277
+2025-04-07 00:21:44,358 - INFO - 原始文件名: seg_4f7897ead9c76136d14b.mp4, 文件类型: mp4
+2025-04-07 00:21:44,358 - INFO - 使用原始文件名: seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:21:44,358 - INFO - 文件保存路径: /google/tg2google/downloads/seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:21:44,358 - INFO - 检测到转发消息
+2025-04-07 00:21:44,358 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-07 00:21:44,359 - INFO - 频道消息: channel_id=2490567130, message_id=23327
+2025-04-07 00:21:44,445 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 00:21:44,445 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23327
+2025-04-07 00:21:44,445 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23327
+2025-04-07 00:21:45,251 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23327 -d /google/tg2google/downloads --template seg_4f7897ead9c76136d14b.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 00:21:55,135 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 00:21:55,135 - INFO - 文件在预期位置: /google/tg2google/downloads/seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:21:55,136 - INFO - 文件下载完成，大小: 124.9 MB
+2025-04-07 00:21:55,139 - INFO - 成功保存历史记录，记录条数: 48
+2025-04-07 00:21:55,140 - INFO - 添加到下载历史，记录ID: 48
+2025-04-07 00:21:55,238 - INFO - 文件处理完成，总用时: 10.8秒, 平均速度: 11.1 MB/s
+2025-04-07 00:21:55,240 - INFO - 更新统计信息: size=124937536, success=True
+2025-04-07 00:21:55,341 - INFO - 已发送最终确认消息
+2025-04-07 00:22:25,057 - INFO - 开始处理文件消息: message_id=183, chat_id=-1002464921647
+2025-04-07 00:22:25,057 - INFO - 原始文件名: seg_4f7897ead9c76136d14b.mp4, 文件类型: mp4
+2025-04-07 00:22:25,058 - INFO - 使用原始文件名: seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:22:25,058 - INFO - 文件保存路径: /google/tg2google/downloads/seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:22:25,058 - INFO - 检测到转发消息
+2025-04-07 00:22:25,058 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-07 00:22:25,058 - INFO - 频道消息: channel_id=2490567130, message_id=23327
+2025-04-07 00:22:25,264 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 00:22:25,265 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23327
+2025-04-07 00:22:25,265 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23327
+2025-04-07 00:22:25,436 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23327 -d /google/tg2google/downloads --template seg_4f7897ead9c76136d14b.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 00:22:26,089 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 00:22:26,089 - INFO - 文件在预期位置: /google/tg2google/downloads/seg_4f7897ead9c76136d14b.mp4
+2025-04-07 00:22:26,089 - INFO - 文件下载完成，大小: 124.9 MB
+2025-04-07 00:22:26,091 - INFO - 成功保存历史记录，记录条数: 49
+2025-04-07 00:22:26,091 - INFO - 添加到下载历史，记录ID: 49
+2025-04-07 00:22:26,186 - INFO - 文件处理完成，总用时: 1.0秒, 平均速度: 115.4 MB/s
+2025-04-07 00:22:26,186 - INFO - 更新统计信息: size=124937536, success=True
+2025-04-07 00:22:26,282 - INFO - 已发送最终确认消息
+2025-04-07 00:28:56,649 - INFO - 开始处理文件消息: message_id=186, chat_id=-1002464921647
+2025-04-07 00:28:56,649 - INFO - 原始文件名: 更多视频请在tg收藏夹输入@JPYPorn.mp4, 文件类型: mp4
+2025-04-07 00:28:56,649 - INFO - 使用原始文件名: 更多视频请在tg收藏夹输入@JPYPorn.mp4
+2025-04-07 00:28:56,649 - INFO - 文件保存路径: /google/tg2google/downloads/更多视频请在tg收藏夹输入@JPYPorn.mp4
+2025-04-07 00:28:56,649 - INFO - 检测到转发消息
+2025-04-07 00:28:56,649 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-07 00:28:56,649 - INFO - 频道消息: channel_id=2490567130, message_id=23333
+2025-04-07 00:28:56,728 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 00:28:56,728 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23333
+2025-04-07 00:28:56,728 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23333
+2025-04-07 00:28:58,505 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23333 -d /google/tg2google/downloads --template 更多视频请在tg收藏夹输入@JPYPorn.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 00:29:39,200 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 00:29:39,202 - INFO - 文件在预期位置: /google/tg2google/downloads/更多视频请在tg收藏夹输入@JPYPorn.mp4
+2025-04-07 00:29:39,202 - INFO - 文件下载完成，大小: 407.6 MB
+2025-04-07 00:29:39,203 - INFO - 成功保存历史记录，记录条数: 50
+2025-04-07 00:29:39,203 - INFO - 添加到下载历史，记录ID: 50
+2025-04-07 00:29:39,307 - INFO - 文件处理完成，总用时: 42.6秒, 平均速度: 9.1 MB/s
+2025-04-07 00:29:39,308 - INFO - 更新统计信息: size=407608053, success=True
+2025-04-07 00:29:39,406 - INFO - 已发送最终确认消息
+2025-04-07 00:30:07,884 - INFO - 开始处理文件消息: message_id=546, chat_id=1227176277
+2025-04-07 00:30:07,884 - INFO - 原始文件名: 10d55395f9d3f4e2e23c513956d539e2_out_5550212363_4077.mp4, 文件类型: mp4
+2025-04-07 00:30:07,884 - INFO - 使用原始文件名: 10d55395f9d3f4e2e23c513956d539e2_out_5550212363_4077.mp4
+2025-04-07 00:30:07,884 - INFO - 文件保存路径: /google/tg2google/downloads/10d55395f9d3f4e2e23c513956d539e2_out_5550212363_4077.mp4
+2025-04-07 00:30:07,884 - INFO - 检测到转发消息
+2025-04-07 00:30:07,884 - INFO - 转发来源ID: PeerChannel(channel_id=1661659355)
+2025-04-07 00:30:07,884 - INFO - 频道消息: channel_id=1661659355, message_id=4032
+2025-04-07 00:30:07,885 - INFO - 开始处理文件消息: message_id=547, chat_id=1227176277
+2025-04-07 00:30:07,885 - INFO - 原始文件名: ab63cdd9608a240a77eef55ed2ed5ab0_out_5550212363_4090.mp4, 文件类型: mp4
+2025-04-07 00:30:07,885 - INFO - 使用原始文件名: ab63cdd9608a240a77eef55ed2ed5ab0_out_5550212363_4090.mp4
+2025-04-07 00:30:07,885 - INFO - 文件保存路径: /google/tg2google/downloads/ab63cdd9608a240a77eef55ed2ed5ab0_out_5550212363_4090.mp4
+2025-04-07 00:30:07,885 - INFO - 检测到转发消息
+2025-04-07 00:30:07,885 - INFO - 转发来源ID: PeerChannel(channel_id=1661659355)
+2025-04-07 00:30:07,885 - INFO - 频道消息: channel_id=1661659355, message_id=4035
+2025-04-07 00:30:07,961 - INFO - 获取频道实体: Channel(id=1661659355, title='后入射日', photo=ChatPhoto(photo_id=6298655469450933076, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2022, 8, 5, 12, 5, 41, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-5880318768696194550, username='hourushe', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 00:30:07,961 - INFO - 构建公开频道链接: https://t.me/hourushe/4035
+2025-04-07 00:30:07,961 - INFO - 开始下载文件，链接: https://t.me/hourushe/4035
+2025-04-07 00:30:07,962 - INFO - 获取频道实体: Channel(id=1661659355, title='后入射日', photo=ChatPhoto(photo_id=6298655469450933076, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2022, 8, 5, 12, 5, 41, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-5880318768696194550, username='hourushe', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 00:30:07,963 - INFO - 构建公开频道链接: https://t.me/hourushe/4032
+2025-04-07 00:30:07,963 - INFO - 开始下载文件，链接: https://t.me/hourushe/4032
+2025-04-07 00:30:08,059 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/hourushe/4035 -d /google/tg2google/downloads --template ab63cdd9608a240a77eef55ed2ed5ab0_out_5550212363_4090.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 00:30:08,066 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/hourushe/4032 -d /google/tg2google/downloads --template 10d55395f9d3f4e2e23c513956d539e2_out_5550212363_4077.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 00:30:09,046 - ERROR - TDL 下载失败
+2025-04-07 00:30:28,773 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 00:30:28,775 - INFO - 文件在预期位置: /google/tg2google/downloads/ab63cdd9608a240a77eef55ed2ed5ab0_out_5550212363_4090.mp4
+2025-04-07 00:30:28,776 - INFO - 文件下载完成，大小: 95.7 MB
+2025-04-07 00:30:28,777 - INFO - 成功保存历史记录，记录条数: 51
+2025-04-07 00:30:28,777 - INFO - 添加到下载历史，记录ID: 51
+2025-04-07 00:30:28,865 - INFO - 文件处理完成，总用时: 20.9秒, 平均速度: 4.4 MB/s
+2025-04-07 00:30:28,865 - INFO - 更新统计信息: size=95749907, success=True
+2025-04-07 00:30:28,962 - INFO - 已发送最终确认消息
+2025-04-07 00:41:50,631 - INFO - 开始处理文件消息: message_id=189, chat_id=-1002464921647
+2025-04-07 00:41:50,631 - INFO - 原始文件名: IMG_5777.MP4, 文件类型: MP4
+2025-04-07 00:41:50,631 - INFO - 使用原始文件名: IMG_5777.MP4
+2025-04-07 00:41:50,631 - INFO - 文件保存路径: /google/tg2google/downloads/IMG_5777.MP4
+2025-04-07 00:41:50,631 - INFO - 检测到转发消息
+2025-04-07 00:41:50,631 - INFO - 转发来源ID: PeerUser(user_id=8135271176)
+2025-04-07 00:41:50,632 - INFO - 用户消息: user_id=8135271176, message_id=2025-04-07 00:41:43+00:00
+2025-04-07 00:41:50,632 - ERROR - 处理文件时出错: 'Forward' object has no attribute 'link'
+Traceback (most recent call last):
+  File "/root/tg2gd/tdl-tg2gd.py", line 640, in handle_file
+    message_link = event.message.forward.link
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Forward' object has no attribute 'link'
+2025-04-07 01:20:49,189 - INFO - 开始处理文件消息: message_id=191, chat_id=-1002464921647
+2025-04-07 01:20:49,190 - INFO - 原始文件名: 长清大学黑丝AJ门！长清大一学妹穿着黑丝被体育生后入干到抽搐_18分21秒高清完整版_每日大赛_吃瓜爆料每日大赛聚集地_mrds.mp4, 文件类型: mp4
+2025-04-07 01:20:49,190 - INFO - 使用原始文件名: 长清大学黑丝AJ门！长清大一学妹穿着黑丝被体育生后入干到抽搐_18分21秒高清完整版_每日大赛_吃瓜爆料每日大赛聚集地_mrds.mp4
+2025-04-07 01:20:49,190 - INFO - 文件保存路径: /google/tg2google/downloads/长清大学黑丝AJ门！长清大一学妹穿着黑丝被体育生后入干到抽搐_18分21秒高清完整版_每日大赛_吃瓜爆料每日大赛聚集地_mrds.mp4
+2025-04-07 01:20:49,190 - INFO - 检测到转发消息
+2025-04-07 01:20:49,190 - INFO - 转发来源ID: PeerChannel(channel_id=2164954725)
+2025-04-07 01:20:49,190 - INFO - 频道消息: channel_id=2164954725, message_id=1003
+2025-04-07 01:20:49,280 - INFO - 获取频道实体: Channel(id=2164954725, title='学生反差内射自拍', photo=ChatPhoto(photo_id=6187977130055418083, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 6, 21, 18, 18, 11, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=7219575079798916152, username='zycccsn', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 01:20:49,280 - INFO - 构建公开频道链接: https://t.me/zycccsn/1003
+2025-04-07 01:20:49,280 - INFO - 开始下载文件，链接: https://t.me/zycccsn/1003
+2025-04-07 01:20:50,085 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/zycccsn/1003 -d /google/tg2google/downloads --template 长清大学黑丝AJ门！长清大一学妹穿着黑丝被体育生后入干到抽搐_18分21秒高清完整版_每日大赛_吃瓜爆料每日大赛聚集地_mrds.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 01:21:14,538 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 01:21:14,539 - INFO - 文件在预期位置: /google/tg2google/downloads/长清大学黑丝AJ门！长清大一学妹穿着黑丝被体育生后入干到抽搐_18分21秒高清完整版_每日大赛_吃瓜爆料每日大赛聚集地_mrds.mp4
+2025-04-07 01:21:14,540 - INFO - 文件下载完成，大小: 357.2 MB
+2025-04-07 01:21:14,544 - INFO - 成功保存历史记录，记录条数: 52
+2025-04-07 01:21:14,544 - INFO - 添加到下载历史，记录ID: 52
+2025-04-07 01:21:14,645 - INFO - 文件处理完成，总用时: 25.4秒, 平均速度: 13.4 MB/s
+2025-04-07 01:21:14,645 - INFO - 更新统计信息: size=357157740, success=True
+2025-04-07 01:21:14,746 - INFO - 已发送最终确认消息
+2025-04-07 02:52:23,788 - INFO - 开始处理文件消息: message_id=553, chat_id=1227176277
+2025-04-07 02:52:23,791 - INFO - 原始文件名: 2e6ac1f6e7f9bce27fabc8aa7352167a_out_5550212363_40136.mp4, 文件类型: mp4
+2025-04-07 02:52:23,791 - INFO - 使用原始文件名: 2e6ac1f6e7f9bce27fabc8aa7352167a_out_5550212363_40136.mp4
+2025-04-07 02:52:23,791 - INFO - 文件保存路径: /google/tg2google/downloads/2e6ac1f6e7f9bce27fabc8aa7352167a_out_5550212363_40136.mp4
+2025-04-07 02:52:23,791 - INFO - 检测到转发消息
+2025-04-07 02:52:23,792 - INFO - 转发来源ID: PeerChannel(channel_id=1661659355)
+2025-04-07 02:52:23,792 - INFO - 频道消息: channel_id=1661659355, message_id=3925
+2025-04-07 02:52:23,867 - INFO - 获取频道实体: Channel(id=1661659355, title='后入射日', photo=ChatPhoto(photo_id=6298655469450933076, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2022, 8, 5, 12, 5, 41, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-5880318768696194550, username='hourushe', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 02:52:23,867 - INFO - 构建公开频道链接: https://t.me/hourushe/3925
+2025-04-07 02:52:23,868 - INFO - 开始下载文件，链接: https://t.me/hourushe/3925
+2025-04-07 02:52:24,940 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/hourushe/3925 -d /google/tg2google/downloads --template 2e6ac1f6e7f9bce27fabc8aa7352167a_out_5550212363_40136.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 02:52:55,268 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 02:52:55,274 - INFO - 文件在预期位置: /google/tg2google/downloads/2e6ac1f6e7f9bce27fabc8aa7352167a_out_5550212363_40136.mp4
+2025-04-07 02:52:55,274 - INFO - 文件下载完成，大小: 140.1 MB
+2025-04-07 02:52:55,279 - INFO - 成功保存历史记录，记录条数: 53
+2025-04-07 02:52:55,280 - INFO - 添加到下载历史，记录ID: 53
+2025-04-07 02:52:55,373 - INFO - 文件处理完成，总用时: 31.5秒, 平均速度: 4.2 MB/s
+2025-04-07 02:52:55,374 - INFO - 更新统计信息: size=140057419, success=True
+2025-04-07 02:52:55,469 - INFO - 已发送最终确认消息
+2025-04-07 05:31:51,580 - INFO - 开始处理文件消息: message_id=194, chat_id=-1002464921647
+2025-04-07 05:31:51,584 - INFO - 原始文件名: d49cdcc515b37a4b749311c29e0b0bb4_out_5550212363.mp4, 文件类型: mp4
+2025-04-07 05:31:51,584 - INFO - 使用原始文件名: d49cdcc515b37a4b749311c29e0b0bb4_out_5550212363.mp4
+2025-04-07 05:31:51,584 - INFO - 文件保存路径: /google/tg2google/downloads/d49cdcc515b37a4b749311c29e0b0bb4_out_5550212363.mp4
+2025-04-07 05:31:51,584 - INFO - 检测到转发消息
+2025-04-07 05:31:51,584 - INFO - 转发来源ID: PeerChannel(channel_id=1661659355)
+2025-04-07 05:31:51,584 - INFO - 频道消息: channel_id=1661659355, message_id=3908
+2025-04-07 05:31:51,659 - INFO - 获取频道实体: Channel(id=1661659355, title='后入射日', photo=ChatPhoto(photo_id=6298655469450933076, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2022, 8, 5, 12, 5, 41, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-5880318768696194550, username='hourushe', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 05:31:51,660 - INFO - 构建公开频道链接: https://t.me/hourushe/3908
+2025-04-07 05:31:51,660 - INFO - 开始下载文件，链接: https://t.me/hourushe/3908
+2025-04-07 05:31:52,737 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/hourushe/3908 -d /google/tg2google/downloads --template d49cdcc515b37a4b749311c29e0b0bb4_out_5550212363.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 05:32:18,941 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 05:32:18,945 - INFO - 文件在预期位置: /google/tg2google/downloads/d49cdcc515b37a4b749311c29e0b0bb4_out_5550212363.mp4
+2025-04-07 05:32:18,945 - INFO - 文件下载完成，大小: 117.2 MB
+2025-04-07 05:32:18,949 - INFO - 成功保存历史记录，记录条数: 54
+2025-04-07 05:32:18,949 - INFO - 添加到下载历史，记录ID: 54
+2025-04-07 05:32:19,076 - INFO - 文件处理完成，总用时: 27.4秒, 平均速度: 4.1 MB/s
+2025-04-07 05:32:19,076 - INFO - 更新统计信息: size=117174712, success=True
+2025-04-07 05:32:19,194 - INFO - 已发送最终确认消息
+2025-04-07 05:42:50,915 - INFO - 开始处理文件消息: message_id=197, chat_id=-1002464921647
+2025-04-07 05:42:50,915 - INFO - 原始文件名: d4cc607cdb0611d0d8711b2f9c4743c8_out_5550212363_490.mp4, 文件类型: mp4
+2025-04-07 05:42:50,915 - INFO - 使用原始文件名: d4cc607cdb0611d0d8711b2f9c4743c8_out_5550212363_490.mp4
+2025-04-07 05:42:50,915 - INFO - 文件保存路径: /google/tg2google/downloads/d4cc607cdb0611d0d8711b2f9c4743c8_out_5550212363_490.mp4
+2025-04-07 05:42:50,915 - INFO - 检测到转发消息
+2025-04-07 05:42:50,915 - INFO - 转发来源ID: PeerChannel(channel_id=1661659355)
+2025-04-07 05:42:50,915 - INFO - 频道消息: channel_id=1661659355, message_id=3779
+2025-04-07 05:42:50,993 - INFO - 获取频道实体: Channel(id=1661659355, title='后入射日', photo=ChatPhoto(photo_id=6298655469450933076, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2022, 8, 5, 12, 5, 41, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=True, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-5880318768696194550, username='hourushe', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-07 05:42:50,993 - INFO - 构建公开频道链接: https://t.me/hourushe/3779
+2025-04-07 05:42:50,993 - INFO - 开始下载文件，链接: https://t.me/hourushe/3779
+2025-04-07 05:42:52,043 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/hourushe/3779 -d /google/tg2google/downloads --template d4cc607cdb0611d0d8711b2f9c4743c8_out_5550212363_490.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-07 05:43:07,761 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-07 05:43:07,762 - INFO - 文件在预期位置: /google/tg2google/downloads/d4cc607cdb0611d0d8711b2f9c4743c8_out_5550212363_490.mp4
+2025-04-07 05:43:07,762 - INFO - 文件下载完成，大小: 51.0 MB
+2025-04-07 05:43:07,764 - INFO - 成功保存历史记录，记录条数: 55
+2025-04-07 05:43:07,764 - INFO - 添加到下载历史，记录ID: 55
+2025-04-07 05:43:07,856 - INFO - 文件处理完成，总用时: 16.8秒, 平均速度: 2.9 MB/s
+2025-04-07 05:43:07,856 - INFO - 更新统计信息: size=51031049, success=True
+2025-04-07 05:43:07,961 - INFO - 已发送最终确认消息
+2025-04-07 12:20:26,060 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 12:24:20,752 - WARNING - Attempt 2 at connecting failed: TimeoutError: 
+2025-04-07 12:27:36,098 - WARNING - Attempt 3 at connecting failed: TimeoutError: 
+2025-04-07 12:31:55,261 - WARNING - Attempt 4 at connecting failed: TimeoutError: 
+2025-04-07 12:34:56,237 - WARNING - Attempt 5 at connecting failed: TimeoutError: 
+2025-04-07 12:39:36,338 - WARNING - Attempt 6 at connecting failed: TimeoutError: 
+2025-04-07 12:44:05,786 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 13:14:21,973 - WARNING - Graceful disconnection timed out, forcibly ignoring cleanup
+2025-04-07 13:16:47,003 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 13:30:30,979 - WARNING - Graceful disconnection timed out, forcibly ignoring cleanup
+2025-04-07 13:35:34,476 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 13:41:47,169 - WARNING - Attempt 2 at connecting failed: TimeoutError: 
+2025-04-07 13:48:59,295 - WARNING - Attempt 3 at connecting failed: TimeoutError: 
+2025-04-07 13:54:23,382 - WARNING - Attempt 4 at connecting failed: TimeoutError: 
+2025-04-07 13:59:24,125 - WARNING - Attempt 5 at connecting failed: TimeoutError: 
+2025-04-07 14:06:10,395 - WARNING - Attempt 6 at connecting failed: TimeoutError: 
+2025-04-07 14:14:03,480 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 14:21:47,950 - WARNING - Attempt 2 at connecting failed: TimeoutError: 
+2025-04-07 14:29:53,347 - WARNING - Attempt 3 at connecting failed: TimeoutError: 
+2025-04-07 14:40:32,906 - WARNING - Attempt 4 at connecting failed: TimeoutError: 
+2025-04-07 14:51:16,554 - WARNING - Attempt 5 at connecting failed: TimeoutError: 
+2025-04-07 15:02:35,923 - WARNING - Attempt 6 at connecting failed: TimeoutError: 
+2025-04-07 15:15:18,411 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 15:26:50,947 - WARNING - Attempt 2 at connecting failed: TimeoutError: 
+2025-04-07 15:35:55,305 - WARNING - Attempt 3 at connecting failed: TimeoutError: 
+2025-04-07 15:45:09,650 - WARNING - Attempt 4 at connecting failed: TimeoutError: 
+2025-04-07 15:53:54,891 - WARNING - Attempt 5 at connecting failed: TimeoutError: 
+2025-04-07 16:01:30,558 - WARNING - Attempt 6 at connecting failed: TimeoutError: 
+2025-04-07 16:08:02,413 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-07 16:12:49,680 - WARNING - Attempt 2 at connecting failed: TimeoutError: 
+2025-04-07 16:21:11,097 - WARNING - Attempt 3 at connecting failed: TimeoutError: 
+2025-04-07 16:29:21,261 - WARNING - Attempt 4 at connecting failed: TimeoutError: 
+2025-04-07 16:35:29,924 - WARNING - Attempt 5 at connecting failed: TimeoutError: 
+2025-04-07 16:43:10,471 - WARNING - Attempt 6 at connecting failed: TimeoutError: 
+2025-04-07 16:47:39,662 - WARNING - Attempt 1 at connecting failed: TimeoutError: 
+2025-04-09 01:30:46,689 - INFO - 开始处理文件消息: message_id=200, chat_id=-1002464921647
+2025-04-09 01:30:46,693 - INFO - 原始文件名: 爆操超嫩的03年白虎母狗 必撸精品.mp4, 文件类型: mp4
+2025-04-09 01:30:46,693 - INFO - 使用原始文件名: 爆操超嫩的03年白虎母狗 必撸精品.mp4
+2025-04-09 01:30:46,693 - INFO - 文件保存路径: /google/tg2google/downloads/爆操超嫩的03年白虎母狗 必撸精品.mp4
+2025-04-09 01:30:46,693 - INFO - 检测到转发消息
+2025-04-09 01:30:46,694 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-09 01:30:46,694 - INFO - 频道消息: channel_id=2490567130, message_id=23377
+2025-04-09 01:30:46,770 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 01:30:46,770 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23377
+2025-04-09 01:30:46,770 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23377
+2025-04-09 01:30:47,495 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23377 -d /google/tg2google/downloads --template 爆操超嫩的03年白虎母狗 必撸精品.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 01:30:51,070 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-09 01:30:51,071 - INFO - 文件在预期位置: /google/tg2google/downloads/爆操超嫩的03年白虎母狗 必撸精品.mp4
+2025-04-09 01:30:51,072 - INFO - 文件下载完成，大小: 41.7 MB
+2025-04-09 01:30:51,075 - INFO - 成功保存历史记录，记录条数: 56
+2025-04-09 01:30:51,075 - INFO - 添加到下载历史，记录ID: 56
+2025-04-09 01:30:51,174 - INFO - 文件处理完成，总用时: 4.4秒, 平均速度: 9.1 MB/s
+2025-04-09 01:30:51,174 - INFO - 更新统计信息: size=41680401, success=True
+2025-04-09 01:30:51,275 - INFO - 已发送最终确认消息
+2025-04-09 07:04:46,490 - INFO - 开始处理文件消息: message_id=203, chat_id=-1002464921647
+2025-04-09 07:04:46,493 - INFO - 原始文件名: 12.mp4, 文件类型: mp4
+2025-04-09 07:04:46,493 - INFO - 使用原始文件名: 12.mp4
+2025-04-09 07:04:46,493 - INFO - 文件保存路径: /google/tg2google/downloads/12.mp4
+2025-04-09 07:04:46,493 - INFO - 检测到转发消息
+2025-04-09 07:04:46,493 - INFO - 转发来源ID: PeerChannel(channel_id=1647411182)
+2025-04-09 07:04:46,493 - INFO - 频道消息: channel_id=1647411182, message_id=6735
+2025-04-09 07:04:46,575 - INFO - 获取频道实体: Channel(id=1647411182, title='后入 内射', photo=ChatPhoto(photo_id=6246530951777729122, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 5, 26, 6, 59, 19, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=699265886643379615, username='yinsuav1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 07:04:46,576 - INFO - 构建公开频道链接: https://t.me/yinsuav1/6735
+2025-04-09 07:04:46,576 - INFO - 开始下载文件，链接: https://t.me/yinsuav1/6735
+2025-04-09 07:04:47,371 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuav1/6735 -d /google/tg2google/downloads --template 12.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 07:05:06,826 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-09 07:05:06,828 - INFO - 文件在预期位置: /google/tg2google/downloads/12.mp4
+2025-04-09 07:05:06,829 - INFO - 文件下载完成，大小: 164.9 MB
+2025-04-09 07:05:06,833 - INFO - 成功保存历史记录，记录条数: 57
+2025-04-09 07:05:06,834 - INFO - 添加到下载历史，记录ID: 57
+2025-04-09 07:05:06,946 - INFO - 文件处理完成，总用时: 20.3秒, 平均速度: 7.7 MB/s
+2025-04-09 07:05:06,946 - INFO - 更新统计信息: size=164888586, success=True
+2025-04-09 07:05:07,075 - INFO - 已发送最终确认消息
+2025-04-09 16:37:51,434 - INFO - 开始处理文件消息: message_id=206, chat_id=-1002464921647
+2025-04-09 16:37:51,436 - INFO - 原始文件名: IMG_3279.MP4, 文件类型: MP4
+2025-04-09 16:37:51,436 - INFO - 使用原始文件名: IMG_3279.MP4
+2025-04-09 16:37:51,436 - INFO - 文件保存路径: /google/tg2google/downloads/IMG_3279.MP4
+2025-04-09 16:37:51,436 - INFO - 检测到转发消息
+2025-04-09 16:37:51,436 - INFO - 转发来源ID: PeerChannel(channel_id=1647411182)
+2025-04-09 16:37:51,436 - INFO - 频道消息: channel_id=1647411182, message_id=6682
+2025-04-09 16:37:51,516 - INFO - 获取频道实体: Channel(id=1647411182, title='后入 内射', photo=ChatPhoto(photo_id=6246530951777729122, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 5, 26, 6, 59, 19, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=699265886643379615, username='yinsuav1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 16:37:51,517 - INFO - 构建公开频道链接: https://t.me/yinsuav1/6682
+2025-04-09 16:37:51,517 - INFO - 开始下载文件，链接: https://t.me/yinsuav1/6682
+2025-04-09 16:37:52,378 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuav1/6682 -d /google/tg2google/downloads --template IMG_3279.MP4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 16:37:55,010 - INFO - TDL下载报告成功，检查文件存在性
+2025-04-09 16:37:55,011 - INFO - 找到可能的文件: /google/tg2google/downloads/IMG_3279.mp4
+2025-04-09 16:37:55,013 - INFO - 文件下载完成，大小: 5.2 MB
+2025-04-09 16:37:55,015 - INFO - 成功保存历史记录，记录条数: 58
+2025-04-09 16:37:55,015 - INFO - 添加到下载历史，记录ID: 58
+2025-04-09 16:37:55,145 - INFO - 文件处理完成，总用时: 3.6秒, 平均速度: 1.4 MB/s
+2025-04-09 16:37:55,145 - INFO - 更新统计信息: size=5171457, success=True
+2025-04-09 16:37:55,248 - INFO - 已发送最终确认消息
+2025-04-09 16:39:46,409 - INFO - 开始处理文件消息: message_id=209, chat_id=-1002464921647
+2025-04-09 16:39:46,410 - INFO - 原始文件名: file_209, 文件类型: 
+2025-04-09 16:39:46,410 - INFO - 使用原始文件名: file_209
+2025-04-09 16:39:46,410 - INFO - 文件保存路径: /google/tg2google/downloads/file_209
+2025-04-09 16:39:46,410 - INFO - 检测到转发消息
+2025-04-09 16:39:46,410 - INFO - 转发来源ID: PeerChannel(channel_id=1647411182)
+2025-04-09 16:39:46,410 - INFO - 频道消息: channel_id=1647411182, message_id=6636
+2025-04-09 16:39:46,486 - INFO - 获取频道实体: Channel(id=1647411182, title='后入 内射', photo=ChatPhoto(photo_id=6246530951777729122, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 5, 26, 6, 59, 19, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=699265886643379615, username='yinsuav1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 16:39:46,486 - INFO - 构建公开频道链接: https://t.me/yinsuav1/6636
+2025-04-09 16:39:46,486 - INFO - 开始下载文件，链接: https://t.me/yinsuav1/6636
+2025-04-09 16:39:46,584 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuav1/6636 -d /google/tg2google/downloads --template file_209 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 16:47:30,305 - INFO - 开始处理文件消息: message_id=211, chat_id=-1002464921647
+2025-04-09 16:47:30,307 - INFO - 原始文件名: file_211, 文件类型: 
+2025-04-09 16:47:30,307 - INFO - 使用原始文件名: file_211
+2025-04-09 16:47:30,307 - INFO - 文件保存路径: /google/tg2google/downloads/file_211
+2025-04-09 16:47:30,308 - INFO - 检测到转发消息
+2025-04-09 16:47:30,308 - INFO - 转发来源ID: PeerChannel(channel_id=1647411182)
+2025-04-09 16:47:30,308 - INFO - 频道消息: channel_id=1647411182, message_id=6604
+2025-04-09 16:47:30,391 - INFO - 获取频道实体: Channel(id=1647411182, title='后入 内射', photo=ChatPhoto(photo_id=6246530951777729122, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 5, 26, 6, 59, 19, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=699265886643379615, username='yinsuav1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 16:47:30,391 - INFO - 构建公开频道链接: https://t.me/yinsuav1/6604
+2025-04-09 16:47:30,391 - INFO - 开始下载文件，链接: https://t.me/yinsuav1/6604
+2025-04-09 16:47:31,126 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuav1/6604 -d /google/tg2google/downloads --template file_211 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 16:47:32,154 - ERROR - TDL 下载失败
+2025-04-09 16:53:52,671 - INFO - 开始处理文件消息: message_id=213, chat_id=-1002464921647
+2025-04-09 16:53:52,672 - INFO - 原始文件名: IMG_2397.MP4, 文件类型: MP4
+2025-04-09 16:53:52,672 - INFO - 使用原始文件名: IMG_2397.MP4
+2025-04-09 16:53:52,672 - INFO - 文件保存路径: /google/tg2google/downloads/IMG_2397.MP4
+2025-04-09 16:53:52,672 - INFO - 检测到转发消息
+2025-04-09 16:53:52,673 - INFO - 转发来源ID: PeerChannel(channel_id=1647411182)
+2025-04-09 16:53:52,673 - INFO - 频道消息: channel_id=1647411182, message_id=1622
+2025-04-09 16:53:52,756 - INFO - 获取频道实体: Channel(id=1647411182, title='后入 内射', photo=ChatPhoto(photo_id=6246530951777729122, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 5, 26, 6, 59, 19, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=699265886643379615, username='yinsuav1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 16:53:52,757 - INFO - 构建公开频道链接: https://t.me/yinsuav1/1622
+2025-04-09 16:53:52,757 - INFO - 开始下载文件，链接: https://t.me/yinsuav1/1622
+2025-04-09 16:53:53,468 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuav1/1622 -d /google/tg2google/downloads --template IMG_2397.MP4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 16:53:54,434 - ERROR - TDL 下载失败
+2025-04-09 16:54:46,302 - INFO - 开始处理文件消息: message_id=215, chat_id=-1002464921647
+2025-04-09 16:54:46,302 - INFO - 原始文件名: file_215, 文件类型: 
+2025-04-09 16:54:46,302 - INFO - 使用原始文件名: file_215
+2025-04-09 16:54:46,302 - INFO - 文件保存路径: /google/tg2google/downloads/file_215
+2025-04-09 16:54:46,302 - INFO - 检测到转发消息
+2025-04-09 16:54:46,302 - INFO - 转发来源ID: PeerChannel(channel_id=1981616087)
+2025-04-09 16:54:46,302 - INFO - 频道消息: channel_id=1981616087, message_id=2663
+2025-04-09 16:54:46,382 - INFO - 获取频道实体: Channel(id=1981616087, title='后入🔥少妇', photo=ChatPhoto(photo_id=6109295644180068749, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 6, 5, 13, 28, 52, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-3466642058592317398, username='yinsuh4', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 16:54:46,384 - INFO - 构建公开频道链接: https://t.me/yinsuh4/2663
+2025-04-09 16:54:46,384 - INFO - 开始下载文件，链接: https://t.me/yinsuh4/2663
+2025-04-09 16:54:46,497 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/yinsuh4/2663 -d /google/tg2google/downloads --template file_215 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 16:54:47,463 - ERROR - TDL 下载失败
+2025-04-09 17:01:34,157 - INFO - 开始处理文件消息: message_id=217, chat_id=-1002464921647
+2025-04-09 17:01:34,157 - INFO - 原始文件名: file_217, 文件类型: 
+2025-04-09 17:01:34,157 - INFO - 使用原始文件名: file_217
+2025-04-09 17:01:34,157 - INFO - 文件保存路径: /google/tg2google/downloads/file_217
+2025-04-09 17:01:34,157 - INFO - 检测到转发消息
+2025-04-09 17:01:34,158 - INFO - 转发来源ID: PeerChannel(channel_id=1990233622)
+2025-04-09 17:01:34,158 - INFO - 频道消息: channel_id=1990233622, message_id=2271
+2025-04-09 17:01:34,235 - INFO - 获取频道实体: Channel(id=1990233622, title='白虎阁 | 反差婊国产自拍', photo=ChatPhotoEmpty(), date=datetime.datetime(2024, 3, 6, 4, 42, 58, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=33963179148267050, username='baihuge1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 17:01:34,235 - INFO - 构建公开频道链接: https://t.me/baihuge1/2271
+2025-04-09 17:01:34,235 - INFO - 开始下载文件，链接: https://t.me/baihuge1/2271
+2025-04-09 17:01:35,203 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/baihuge1/2271 -d /google/tg2google/downloads --template file_217 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 17:01:36,170 - ERROR - TDL 下载失败
+2025-04-09 17:02:51,617 - INFO - 开始处理文件消息: message_id=219, chat_id=-1002464921647
+2025-04-09 17:02:51,617 - INFO - 原始文件名: file_219, 文件类型: 
+2025-04-09 17:02:51,617 - INFO - 使用原始文件名: file_219
+2025-04-09 17:02:51,618 - INFO - 文件保存路径: /google/tg2google/downloads/file_219
+2025-04-09 17:02:51,618 - INFO - 检测到转发消息
+2025-04-09 17:02:51,619 - INFO - 转发来源ID: PeerChannel(channel_id=1990233622)
+2025-04-09 17:02:51,619 - INFO - 频道消息: channel_id=1990233622, message_id=2272
+2025-04-09 17:02:51,700 - INFO - 获取频道实体: Channel(id=1990233622, title='白虎阁 | 反差婊国产自拍', photo=ChatPhotoEmpty(), date=datetime.datetime(2024, 3, 6, 4, 42, 58, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=33963179148267050, username='baihuge1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 17:02:51,700 - INFO - 构建公开频道链接: https://t.me/baihuge1/2272
+2025-04-09 17:02:51,700 - INFO - 开始下载文件，链接: https://t.me/baihuge1/2272
+2025-04-09 17:02:51,801 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/baihuge1/2272 -d /google/tg2google/downloads --template file_219 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 17:02:52,770 - ERROR - TDL 下载失败
+2025-04-09 17:08:16,088 - INFO - 开始处理文件消息: message_id=221, chat_id=-1002464921647
+2025-04-09 17:08:16,088 - INFO - 原始文件名: file_221, 文件类型: 
+2025-04-09 17:08:16,088 - INFO - 使用原始文件名: file_221
+2025-04-09 17:08:16,088 - INFO - 文件保存路径: /google/tg2google/downloads/file_221
+2025-04-09 17:08:16,088 - INFO - 检测到转发消息
+2025-04-09 17:08:16,088 - INFO - 转发来源ID: PeerChannel(channel_id=1990233622)
+2025-04-09 17:08:16,088 - INFO - 频道消息: channel_id=1990233622, message_id=2291
+2025-04-09 17:08:16,164 - INFO - 获取频道实体: Channel(id=1990233622, title='白虎阁 | 反差婊国产自拍', photo=ChatPhotoEmpty(), date=datetime.datetime(2024, 3, 6, 4, 42, 58, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=33963179148267050, username='baihuge1', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 17:08:16,164 - INFO - 构建公开频道链接: https://t.me/baihuge1/2291
+2025-04-09 17:08:16,164 - INFO - 开始下载文件，链接: https://t.me/baihuge1/2291
+2025-04-09 17:08:16,994 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/baihuge1/2291 -d /google/tg2google/downloads --template file_221 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 17:08:17,960 - ERROR - TDL 下载失败
+2025-04-09 17:10:57,914 - INFO - 开始处理文件消息: message_id=223, chat_id=-1002464921647
+2025-04-09 17:10:57,915 - INFO - 原始文件名: 【榨汁尤物】高跟大长腿丝控白虎御姐【丝丝女神】看A片发骚自慰，大屌刺入蜜穴退骚，猛操蜜汁无毛嫩鲍.mp4, 文件类型: mp4
+2025-04-09 17:10:57,915 - INFO - 使用原始文件名: 【榨汁尤物】高跟大长腿丝控白虎御姐【丝丝女神】看A片发骚自慰，大屌刺入蜜穴退骚，猛操蜜汁无毛嫩鲍.mp4
+2025-04-09 17:10:57,915 - INFO - 文件保存路径: /google/tg2google/downloads/【榨汁尤物】高跟大长腿丝控白虎御姐【丝丝女神】看A片发骚自慰，大屌刺入蜜穴退骚，猛操蜜汁无毛嫩鲍.mp4
+2025-04-09 17:10:57,915 - INFO - 检测到转发消息
+2025-04-09 17:10:57,915 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-09 17:10:57,915 - INFO - 频道消息: channel_id=2490567130, message_id=23411
+2025-04-09 17:10:58,012 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 17:10:58,012 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23411
+2025-04-09 17:10:58,012 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23411
+2025-04-09 17:10:58,131 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23411 -d /google/tg2google/downloads --template 【榨汁尤物】高跟大长腿丝控白虎御姐【丝丝女神】看A片发骚自慰，大屌刺入蜜穴退骚，猛操蜜汁无毛嫩鲍.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 17:10:59,109 - ERROR - TDL 下载失败
+2025-04-09 17:14:30,251 - INFO - 开始处理文件消息: message_id=225, chat_id=-1002464921647
+2025-04-09 17:14:30,252 - INFO - 原始文件名: IMG_7168.MOV, 文件类型: MOV
+2025-04-09 17:14:30,252 - INFO - 使用原始文件名: IMG_7168.MOV
+2025-04-09 17:14:30,252 - INFO - 文件保存路径: /google/tg2google/downloads/IMG_7168.MOV
+2025-04-09 17:14:30,252 - INFO - 检测到转发消息
+2025-04-09 17:14:30,252 - INFO - 转发来源ID: PeerChannel(channel_id=2490567130)
+2025-04-09 17:14:30,252 - INFO - 频道消息: channel_id=2490567130, message_id=23443
+2025-04-09 17:14:30,386 - INFO - 获取频道实体: Channel(id=2490567130, title='萝莉母狗福利姬', photo=ChatPhoto(photo_id=6201898282997891768, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2024, 11, 23, 7, 4, 18, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=False, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=8107189974480434668, username='fuliji9981', restriction_reason=[], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-09 17:14:30,386 - INFO - 构建公开频道链接: https://t.me/fuliji9981/23443
+2025-04-09 17:14:30,386 - INFO - 开始下载文件，链接: https://t.me/fuliji9981/23443
+2025-04-09 17:14:31,138 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/fuliji9981/23443 -d /google/tg2google/downloads --template IMG_7168.MOV --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-09 17:14:32,113 - ERROR - TDL 下载失败
+2025-04-10 00:43:52,195 - INFO - 开始处理文件消息: message_id=227, chat_id=-1002464921647
+2025-04-10 00:43:52,200 - INFO - 原始文件名: fee4ddb175bf9e1e19d468d51c5ff5fc_out_5550212363_233517.mp4, 文件类型: mp4
+2025-04-10 00:43:52,200 - INFO - 使用原始文件名: fee4ddb175bf9e1e19d468d51c5ff5fc_out_5550212363_233517.mp4
+2025-04-10 00:43:52,201 - INFO - 文件保存路径: /google/tg2google/downloads/fee4ddb175bf9e1e19d468d51c5ff5fc_out_5550212363_233517.mp4
+2025-04-10 00:43:52,201 - INFO - 检测到转发消息
+2025-04-10 00:43:52,201 - INFO - 转发来源ID: PeerChannel(channel_id=1924130470)
+2025-04-10 00:43:52,201 - INFO - 频道消息: channel_id=1924130470, message_id=26697
+2025-04-10 00:43:52,279 - INFO - 获取频道实体: Channel(id=1924130470, title='热门精品AV', photo=ChatPhoto(photo_id=6258179530149705969, dc_id=5, has_video=False, stripped_thumb=None), date=datetime.datetime(2023, 6, 9, 21, 59, 35, tzinfo=datetime.timezone.utc), creator=False, left=True, broadcast=True, verified=False, megagroup=False, restricted=True, signatures=False, min=False, scam=False, has_link=False, has_geo=False, slowmode_enabled=False, call_active=False, call_not_empty=False, fake=False, gigagroup=False, noforwards=False, join_to_send=False, join_request=False, forum=False, stories_hidden=False, stories_hidden_min=True, stories_unavailable=True, signature_profiles=False, access_hash=-2259100792667109521, username='xoatv', restriction_reason=[RestrictionReason(platform='ios', reason='porn', text='This channel can’t be displayed because it was used to spread pornographic content.')], admin_rights=None, banned_rights=None, default_banned_rights=None, participants_count=None, usernames=[], stories_max_id=None, color=None, profile_color=None, emoji_status=None, level=None, subscription_until_date=None, bot_verification_icon=None)
+2025-04-10 00:43:52,279 - INFO - 构建公开频道链接: https://t.me/xoatv/26697
+2025-04-10 00:43:52,279 - INFO - 开始下载文件，链接: https://t.me/xoatv/26697
+2025-04-10 00:43:53,222 - INFO - Running TDL command: /usr/local/bin/tdl dl -u https://t.me/xoatv/26697 -d /google/tg2google/downloads --template fee4ddb175bf9e1e19d468d51c5ff5fc_out_5550212363_233517.mp4 --continue --rewrite-ext --group --skip-same -t 8 -l 4
+2025-04-10 00:43:54,287 - ERROR - TDL 下载失败

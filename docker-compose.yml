@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .  # 使用当前目录的 Dockerfile
+    container_name: telegram-file-bot
+    restart: unless-stopped
+    volumes:
+      - ./downloads:/google/tg2google/downloads  # 挂载下载目录
+      - ./download_history.json:/app/download_history.json  # 挂载历史记录
+      - /usr/local/bin/tdl:/usr/local/bin/tdl  # 挂载宿主机的 tdl
+    environment:
+      - API_ID=16612890  # 替换为你的 Telegram API ID
+      - API_HASH=c0fc7dab1acc44f2a2da55cba248d656  # 替换为你的 API HASH
+      - BOT_TOKEN=7965940462:AAFCSi5PlG5xl9cqQDk6AFuZP4AT-K9OZQM  # 替换为你的 Bot Token
+      - ADMIN_IDS=1227176277  # 替换为你的 Telegram ID
