@@ -24,6 +24,10 @@
   ```bash
   chmod +x /usr/local/bin/tdl
   ```
+- 配tdl目录权限
+  ```bash
+  chmod -R 755 ~/.tdl
+  ```
 - Telegram API 凭证（从 [@BotFather](https://t.me/BotFather) 获取）
 
 ### 步骤 1：克隆仓库
