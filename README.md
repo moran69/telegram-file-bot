@@ -1,5 +1,6 @@
 # 效果演示
-![image](https://github.com/user-attachments/assets/f7945e6e-3d9a-48ce-b447-5c3bb56ad9b1)
+![image](https://github.com/user-attachments/assets/b39e08cd-605d-4f84-93fd-dab34c41fc44)
+
 
 
 # 📥 Telegram 文件下载机器人 (Docker + TDL)
