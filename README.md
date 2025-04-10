@@ -114,7 +114,7 @@ volumes:
 ### 常见问题
 1. **TDL 无法执行**  
    - 确保宿主机 `tdl` 已安装且路径正确
-   - 检查权限：`chmod +x /usr/local/bin/tdl`     chmod -R 755 ~/.tdl
+   - 检查权限：`chmod +x /usr/local/bin/tdl`   `chmod -R 755 ~/.tdl`
 
 2. **文件下载失败**  
    - 检查磁盘空间：`df -h`
