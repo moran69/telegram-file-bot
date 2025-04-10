@@ -1,6 +1,3 @@
-# 效果演示
-![image](https://github.com/user-attachments/assets/18a847eb-bc0e-4860-a70c-0b01f74fc8ff)
-
 
 
 
@@ -85,6 +82,10 @@ docker logs -f telegram-file-bot
 | `/delete <ID>` | 删除指定文件 | `/delete 3` |
 | `/clean` | 清理临时文件 | `/clean` |
 | `/restart` | 重启机器人 | `/restart` |
+
+# 效果演示
+![image](https://github.com/user-attachments/assets/18a847eb-bc0e-4860-a70c-0b01f74fc8ff)
+
 
 ## 📂 文件目录结构
 ```text
