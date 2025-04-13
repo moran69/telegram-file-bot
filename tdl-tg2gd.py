@@ -29,12 +29,12 @@ logging.getLogger('telethon').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 # 基础配置
-API_ID = 16612890
-API_HASH = 'c0fc7dab1acc44f2a2da55cba248d656'
-BOT_TOKEN = '7965940462:AAFCSi5PlG5xl9cqQDk6AFuZP4AT-K9OZQM'
+API_ID = 1661****
+API_HASH = 'c0fc7dab1acc44*****'
+BOT_TOKEN = '7965940462:AAFCSi5PlG*****M'
 
 # 管理员配置
-ADMIN_IDS = [1227176277]  # 替换为你的 Telegram ID
+ADMIN_IDS = [12271****]  # 替换为你的 Telegram ID
 
 # 文件限制配置
 MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
