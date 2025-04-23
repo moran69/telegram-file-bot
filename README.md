@@ -84,7 +84,8 @@ docker logs -f telegram-file-bot
 | `/restart` | 重启机器人 | `/restart` |
 
 # 效果演示
-![image](https://github.com/user-attachments/assets/18a847eb-bc0e-4860-a70c-0b01f74fc8ff)
+![image](https://github.com/user-attachments/assets/45d06ca3-c73d-47ec-8a76-ff6c37d63cc3)
+
 
 
 ## 📂 文件目录结构
