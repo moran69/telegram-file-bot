@@ -2,7 +2,7 @@
   telegram-bot:
     build: .
     container_name: telegram-tdl-forwarder
-    restart: "no"
+    restart: unless-stopped
     volumes:
       - ./forward_history.json:/app/forward_history.json
       - /usr/local/bin/tdl:/usr/local/bin/tdl
