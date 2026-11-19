@@ -7,7 +7,9 @@ import time
 import sys
 import subprocess
 import tempfile
-from telethon import TelegramClient, events
+import secrets
+import sqlite3
+from telethon import TelegramClient, errors, events, functions, types, utils
 from telethon.sessions import MemorySession, StringSession
 from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass
@@ -27,7 +29,10 @@ logging.getLogger('telethon').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 # ─────────────────────────── Config ────────────────────────────
-API_ID = int(os.getenv("API_ID", "0"))
+try:
+    API_ID = int(os.getenv("API_ID") or 0)
+except ValueError:
+    raise SystemExit("配置错误：API_ID 必须是正整数") from None
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 USER_SESSION_STRING = os.getenv("USER_SESSION_STRING", "").strip()
@@ -36,6 +41,7 @@ USER_MONITOR_ENABLED = os.getenv("USER_MONITOR_ENABLED", "1").lower() not in ("0
 TDL_PATH = "/usr/local/bin/tdl"
 FORWARD_LOG_FILE = "forward_history.json"
 FORWARD_LOG_MAX_DAYS = 7  # 保留最近7天
+MONITOR_MAP_FILE = os.getenv("MONITOR_MAP_FILE", "").strip() or "monitor_message_map.sqlite3"
 TELEGRAM_LINK_PATTERN = re.compile(r"https://t\.me/(?:c/)?[A-Za-z0-9_]+/\d+")
 EXCLUDE_KEYWORDS = ["addlist"]
 AUTO_DELETE_BOT_MESSAGES = os.getenv("AUTO_DELETE_BOT_MESSAGES", "1").lower() not in ("0", "false", "no", "off")
@@ -49,22 +55,29 @@ class TaskStatus(Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    UNCONFIRMED = "unconfirmed"
+
+
+class CopyOutcomeUnknown(Exception):
+    """已保留发送意图，不能证明 Telegram 未发送。"""
 
 
 @dataclass
 class ForwardTask:
-    event: events.NewMessage.Event
+    event: events.NewMessage.Event | events.Album.Event
     link: str
-    status_msg_id: int
+    status_msg_id: Optional[int]
     chat_id: int
+    target_chat_id: int
     status_client: Optional[TelegramClient] = None
     status: TaskStatus = TaskStatus.PENDING
     error_msg: str = ""
     created_at: float = 0
     grouped_id: Optional[int] = None
-    mode: str = "clone"  # "clone" 或 "export"
+    mode: str = "clone"  # clone、export_range、monitor_copy、monitor_edit
     message_ids: Optional[list[int]] = None
     source_chat_id: Optional[int] = None
+    edit_retries: int = 0
 
 
 class TaskQueue:
@@ -75,6 +88,7 @@ class TaskQueue:
         self.worker_task: Optional[asyncio.Task] = None
         self.running = False
         self.task_counter = 0
+        self._retry_timers: set[asyncio.TimerHandle] = set()
 
     async def start(self):
         self.running = True
@@ -83,6 +97,7 @@ class TaskQueue:
 
     async def stop(self):
         self.running = False
+        self.cancel_delayed_edits()
         if self.worker_task:
             self.worker_task.cancel()
             try:
@@ -92,6 +107,8 @@ class TaskQueue:
         logger.info("任务队列已停止")
 
     async def _edit_task_status(self, task: ForwardTask, text: str):
+        if task.status_msg_id is None:
+            return None
         try:
             status_client = task.status_client or task.event.client
             status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
@@ -102,8 +119,26 @@ class TaskQueue:
             logger.debug(f"更新任务状态失败: {e}")
         return None
 
+    def retry_edit_later(self, task: ForwardTask, delay: float) -> None:
+        # 不让单帖的 FloodWait 阻塞其他已排队的任务。
+        def requeue():
+            self._retry_timers.discard(timer)
+            self.queue.put_nowait(task)
+
+        task.edit_retries += 1
+        task.status = TaskStatus.PENDING
+        timer = asyncio.get_running_loop().call_later(delay, requeue)
+        self._retry_timers.add(timer)
+
+    def cancel_delayed_edits(self) -> int:
+        count = len(self._retry_timers)
+        for timer in self._retry_timers:
+            timer.cancel()
+        self._retry_timers.clear()
+        return count
+
     async def clear_pending_tasks(self) -> int:
-        cleared = 0
+        cleared = self.cancel_delayed_edits()
         while True:
             try:
                 task = self.queue.get_nowait()
@@ -111,8 +146,6 @@ class TaskQueue:
                 break
             task.status = TaskStatus.FAILED
             task.error_msg = "管理员已停止并清空等待队列"
-            if task.grouped_id:
-                self.bot._album_handling.discard(task.grouped_id)
             status_msg = await self._edit_task_status(task, "⏹️ 已被管理员停止，等待队列已清空")
             self.bot.schedule_status_delete(status_msg, failed=True)
             self.queue.task_done()
@@ -121,19 +154,18 @@ class TaskQueue:
 
     async def mark_current_task_stopped(self) -> bool:
         task = self.current_task
-        if not task:
+        if not task or task.mode in ("monitor_copy", "monitor_edit"):
             return False
         task.status = TaskStatus.FAILED
         task.error_msg = "管理员已停止 TDL 进程"
-        if task.grouped_id:
-            self.bot._album_handling.discard(task.grouped_id)
         status_msg = await self._edit_task_status(task, "⏹️ 已被管理员停止，当前 TDL 进程已终止")
         self.bot.schedule_status_delete(status_msg, failed=True)
         return True
 
-    async def add_task(self, event, link: str, status_msg_id: int, chat_id: int, grouped_id: Optional[int] = None,
-                       mode: str = "clone", message_ids: Optional[list[int]] = None, source_chat_id: Optional[int] = None,
-                       status_client: Optional[TelegramClient] = None) -> int:
+    async def add_task(self, event, link: str, status_msg_id: Optional[int], chat_id: int,
+                       grouped_id: Optional[int] = None, mode: str = "clone",
+                       message_ids: Optional[list[int]] = None, source_chat_id: Optional[int] = None,
+                       status_client: Optional[TelegramClient] = None, *, target_chat_id: int) -> int:
         self.task_counter += 1
         task = ForwardTask(
             event=event,
@@ -145,7 +177,8 @@ class TaskQueue:
             grouped_id=grouped_id,
             mode=mode,
             message_ids=message_ids,
-            source_chat_id=source_chat_id
+            source_chat_id=source_chat_id,
+            target_chat_id=target_chat_id,
         )
         await self.queue.put(task)
         position = self.queue.qsize()
@@ -204,6 +237,10 @@ class TaskQueue:
             logger.debug(f"更新进度消息失败: {e}")
 
     async def _process_task(self, task: ForwardTask):
+        if task.mode in ("monitor_copy", "monitor_edit"):
+            await self.bot.process_monitor_task(task)
+            return
+
         try:
             status_client = task.status_client or task.event.client
             status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
@@ -211,13 +248,11 @@ class TaskQueue:
                 logger.error("无法获取状态消息")
                 return
 
-            target_id = self.bot.target_chat_id
+            target_id = task.target_chat_id
             if target_id is None:
                 await status_msg.edit("❌ 未配置目标频道ID")
                 task.status = TaskStatus.FAILED
                 task.error_msg = "未配置目标频道ID"
-                if task.grouped_id:
-                    self.bot._album_handling.discard(task.grouped_id)
                 return
 
             if task.mode == "clone":
@@ -351,12 +386,10 @@ class TaskQueue:
                     self.bot.schedule_status_delete(status_msg, failed=task.status == TaskStatus.FAILED)
                 except Exception as e:
                     logger.debug(f"安排状态消息自动删除失败: {e}")
-            if task.grouped_id:
-                self.bot._album_handling.discard(task.grouped_id)
 
     def get_queue_status(self) -> dict:
         return {
-            "queue_size": self.queue.qsize(),
+            "queue_size": self.queue.qsize() + len(self._retry_timers),
             "current_task": {
                 "link": self.current_task.link[:50] if self.current_task else None,
                 "status": self.current_task.status.value if self.current_task else None
@@ -373,7 +406,7 @@ START_MESSAGE_ADMIN = (
     '   https://t.me/channel_name/123\n'
     '   https://t.me/c/123456789/123\n'
     '3. 机器人会按队列克隆转发到当前目标频道\n'
-    '4. 配置 MONITOR_CHAT_IDS 后，可自动监听源频道新消息并转发\n\n'
+    '4. 配置 MONITOR_CHAT_IDS 后，自动复制源频道新帖并原地同步正文和说明的编辑\n\n'
     '【管理员命令】\n'
     '/forwardto <频道ID>\n'
     '  设置或修改目标频道，使用 tdl 可识别的裸 ID，不需要加 -100 前缀\n'
@@ -539,6 +572,12 @@ def parse_chat_ids(raw: str) -> list[int]:
 
 
 ADMIN_IDS: list[int] = parse_admin_ids(os.getenv("ADMIN_IDS", ""))
+SUBMITTER_IDS = set(parse_admin_ids(os.getenv("SUBMITTER_IDS", "")))
+
+
+def can_submit(sender_id: Optional[int]) -> bool:
+    return bool(sender_id and sender_id > 0 and (sender_id in ADMIN_IDS or sender_id in SUBMITTER_IDS))
+
 TARGET_CHAT_ID: Optional[int] = parse_chat_id(os.getenv("FORWARD_TO_CHAT_ID", ""))
 MONITOR_CHAT_IDS: list[int] = parse_chat_ids(os.getenv("MONITOR_CHAT_IDS", ""))
 
@@ -594,6 +633,91 @@ class ForwardLog:
     def clear(self) -> None:
         self.logs = []
         self._save()
+
+
+class MonitorMessageMap:
+    """自动复制的精确消息关联，独立于会过期、可清理的转发历史。"""
+
+    def __init__(self, path: str):
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        self.db = sqlite3.connect(path)
+        try:
+            with self.db:
+                self.db.execute("""
+                    CREATE TABLE IF NOT EXISTS monitor_messages (
+                        source_chat_id INTEGER NOT NULL,
+                        source_message_id INTEGER NOT NULL,
+                        target_chat_id INTEGER NOT NULL,
+                        target_message_id INTEGER NOT NULL,
+                        PRIMARY KEY (source_chat_id, source_message_id, target_chat_id)
+                    )
+                """)
+                # 旧版本的已确认映射保持不动；此表只存尚未确认的发送。
+                self.db.execute("""
+                    CREATE TABLE IF NOT EXISTS monitor_copy_intents (
+                        source_chat_id INTEGER NOT NULL,
+                        source_message_id INTEGER NOT NULL,
+                        target_chat_id INTEGER NOT NULL,
+                        random_id INTEGER NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (source_chat_id, source_message_id, target_chat_id)
+                    )
+                """)
+        except Exception:
+            self.db.close()
+            raise
+
+    def get(self, source_chat_id: int, source_message_id: int, target_chat_id: int) -> Optional[int]:
+        row = self.db.execute(
+            "SELECT target_message_id FROM monitor_messages "
+            "WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ?",
+            (source_chat_id, source_message_id, target_chat_id),
+        ).fetchone()
+        return row[0] if row else None
+
+    def reserve(self, source_chat_id: int, target_chat_id: int, ids: list[int]) -> dict[int, int]:
+        """RPC 前提交意图；已有映射或未确认的意图都不能重新发送。"""
+        reserved = {}
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            for mid in ids:
+                key = (source_chat_id, mid, target_chat_id)
+                if self.get(*key) is not None:
+                    continue
+                nonce = secrets.randbits(63) or 1
+                cursor = self.db.execute(
+                    "INSERT INTO monitor_copy_intents (source_chat_id,source_message_id,target_chat_id,random_id) "
+                    "VALUES (?,?,?,?) ON CONFLICT(source_chat_id,source_message_id,target_chat_id) DO NOTHING",
+                    (*key, nonce),
+                )
+                if cursor.rowcount == 1:
+                    reserved[mid] = nonce
+                else:
+                    logger.warning("复制结果待核对，不重复发送：source=%s/%s target=%s", *key)
+        return reserved
+
+    def release_rejected(self, source_id: int, target_id: int, reserved: dict[int, int]) -> None:
+        # 只用于 Telegram 明确拒绝本次请求的情形，不用于网络中断或缺回执。
+        with self.db:
+            self.db.executemany(
+                "DELETE FROM monitor_copy_intents WHERE source_chat_id=? AND source_message_id=? "
+                "AND target_chat_id=? AND random_id=?",
+                [(source_id, mid, target_id, nonce) for mid, nonce in reserved.items()],
+            )
+
+    def remember(self, source_chat_id: int, target_chat_id: int, pairs: dict[int, int]) -> None:
+        with self.db:
+            self.db.executemany(
+                "INSERT INTO monitor_messages VALUES (?, ?, ?, ?)",
+                [(source_chat_id, source_id, target_chat_id, target_id) for source_id, target_id in pairs.items()],
+            )
+            self.db.executemany(
+                "DELETE FROM monitor_copy_intents WHERE source_chat_id=? AND source_message_id=? AND target_chat_id=?",
+                [(source_chat_id, mid, target_chat_id) for mid in pairs],
+            )
+
+    def close(self) -> None:
+        self.db.close()
 
 
 # ─────────────────────────── TDLDownloader ─────────────────────
@@ -802,17 +926,13 @@ class TelegramBot:
         self.client = TelegramClient(MemorySession(), API_ID, API_HASH)
         self.user_client: Optional[TelegramClient] = None
         self.user_monitor_running = False
-        if USER_MONITOR_ENABLED:
-            if USER_SESSION_STRING and not USER_SESSION_STRING.startswith("填入"):
-                self.user_client = TelegramClient(StringSession(USER_SESSION_STRING), API_ID, API_HASH)
-            elif USER_SESSION_FILE:
-                self.user_client = TelegramClient(USER_SESSION_FILE, API_ID, API_HASH)
         self.tdl = TDLDownloader()
         self.target_chat_id: Optional[int] = TARGET_CHAT_ID
         self.monitor_chat_ids: list[int] = MONITOR_CHAT_IDS
         self.forward_log = ForwardLog()
         self._album_processed: set[int] = set()
-        self._album_handling: set[int] = set()
+        self._forward_status_ids: dict[tuple[int, int], None] = {}
+        self._monitor_message_map: Optional[MonitorMessageMap] = None
         self.task_queue = TaskQueue(self)
 
     # ── Link utilities ──────────────────────────────────────────
@@ -884,10 +1004,7 @@ class TelegramBot:
 
     @staticmethod
     def normalize_source_chat_id(chat_id: int) -> int:
-        raw = str(chat_id).lstrip('-')
-        if raw.startswith('100') and len(raw) > 10:
-            raw = raw[3:]
-        return int(raw)
+        return utils.resolve_id(chat_id)[0]
 
     async def get_event_chat_ids(self, event) -> list[int]:
         ids: list[int] = []
@@ -923,20 +1040,12 @@ class TelegramBot:
 
         return ids
 
-    async def is_monitor_source(self, event) -> bool:
-        if not self.monitor_chat_ids:
-            return False
-        event_chat_ids = await self.get_event_chat_ids(event)
-        if not event_chat_ids:
-            return False
-        normalized_event_ids = {self.normalize_source_chat_id(chat_id) for chat_id in event_chat_ids}
-        normalized_sources = {self.normalize_source_chat_id(source_id) for source_id in self.monitor_chat_ids}
-        matched = bool(normalized_event_ids & normalized_sources)
-        logger.info(
-            f"监听匹配检查: event_ids={event_chat_ids}, "
-            f"normalized_event_ids={normalized_event_ids}, normalized_sources={normalized_sources}, matched={matched}"
+    def is_monitor_post(self, message) -> bool:
+        return (
+            bool(message.post)
+            and isinstance(message.peer_id, types.PeerChannel)
+            and self.has_monitor_chat_id(message.peer_id.channel_id)
         )
-        return matched
 
     def has_monitor_chat_id(self, chat_id: int) -> bool:
         normalized_chat_id = self.normalize_source_chat_id(chat_id)
@@ -1006,49 +1115,193 @@ class TelegramBot:
     def schedule_command_delete(self, message) -> None:
         self.schedule_delete(message, AUTO_DELETE_COMMAND_SECONDS)
 
-    async def create_auto_status_message(self, event, text: str):
-        if ADMIN_IDS:
-            try:
-                return await self.client.send_message(ADMIN_IDS[0], text)
-            except Exception as e:
-                logger.error(f"创建自动监听状态消息失败，将回退到源会话回复: {e}")
-        return await event.respond(text)
+    def remember_forward_status(self, chat_id: int, message_id: int) -> None:
+        self._forward_status_ids[(chat_id, message_id)] = None
+        if len(self._forward_status_ids) > 1024:
+            self._forward_status_ids.pop(next(iter(self._forward_status_ids)))
 
     def is_user_monitor_active(self) -> bool:
         return self.user_client is not None and self.user_monitor_running
 
-    async def handle_auto_monitor_event(self, event, source: str) -> None:
-        is_album = self.is_album(event)
-        gid = getattr(event.message, 'grouped_id', None) if is_album else None
+    def monitor_target_channel_id(self) -> Optional[int]:
+        if not self.target_chat_id:
+            return None
+        return utils.resolve_id(self.target_chat_id)[0]
 
-        if is_album and gid and gid in self._album_handling:
-            logger.info(f"跳过 Album 消息（已在处理中）: grouped_id={gid}")
+    async def enqueue_monitor_post(self, event, messages, *, edited: bool = False) -> None:
+        if not messages:
             return
-
-        if is_album and gid:
-            self._album_handling.add(gid)
-            if len(self._album_handling) > 500:
-                self._album_handling.clear()
-
-        status_msg = await self.create_auto_status_message(event, "⏳ 自动监听：正在加入转发队列...")
-        logger.info(
-            f"{source} 监听频道新消息，chat_id={event.chat_id}, msg_id={event.message.id}"
+        message = messages[0]
+        if not self.is_monitor_post(message) or (event.chat_id, message.id) in self._forward_status_ids:
+            return
+        source_id = message.peer_id.channel_id
+        target_id = self.monitor_target_channel_id()
+        if target_id is None or target_id == source_id:
+            logger.warning("跳过频道同步：未配置目标频道或目标就是源频道，source=%s", source_id)
+            return
+        # Album 处理完整的相册；NewMessage 不单独复制相册成员。
+        ids = sorted({item.id for item in messages})
+        await self.task_queue.add_task(
+            event, f"https://t.me/c/{source_id}/{ids[0]}", None, event.chat_id,
+            mode="monitor_edit" if edited else "monitor_copy", message_ids=ids,
+            source_chat_id=source_id, target_chat_id=target_id,
         )
-        await self.do_forward(event, status_msg, auto=True)
+
+    def register_monitor_events(self, client: TelegramClient, *, fallback: bool = False) -> None:
+        @client.on(events.Album)
+        async def monitor_album(event):
+            if not fallback or not self.is_user_monitor_active():
+                await self.enqueue_monitor_post(event, event.messages)
+
+        @client.on(events.MessageEdited)
+        async def monitor_edit(event):
+            if not fallback or not self.is_user_monitor_active():
+                await self.enqueue_monitor_post(event, [event.message], edited=True)
+
+    async def get_monitor_target_peer(self, client: TelegramClient, target_id: int):
+        try:
+            return await client.get_input_entity(types.PeerChannel(target_id))
+        except (ValueError, errors.ChannelPrivateError):
+            # 用户 session 初次运行时可能尚未缓存目标频道的 access hash。
+            if client is not self.client:
+                async for dialog in client.iter_dialogs():
+                    peer = dialog.input_entity
+                    if isinstance(peer, types.InputPeerChannel) and peer.channel_id == target_id:
+                        return peer
+            raise
+
+    async def report_monitor_copy(self, text: str, *, failed: bool = False) -> None:
+        if ADMIN_IDS:
+            try:
+                status_msg = await self.client.send_message(ADMIN_IDS[0], text)
+                self.schedule_status_delete(status_msg, failed=failed)
+            except Exception as exc:
+                logger.debug("发送频道复制状态失败：%s", exc)
+
+    async def process_monitor_task(self, task: ForwardTask) -> None:
+        source_id, target_id = task.source_chat_id, task.target_chat_id
+        message_ids = task.message_ids
+        try:
+            if self._monitor_message_map is None:
+                self._monitor_message_map = MonitorMessageMap(MONITOR_MAP_FILE)
+            mappings = self._monitor_message_map
+            client = task.event.client
+
+            if task.mode == "monitor_edit":
+                source_msg_id = message_ids[0]
+                target_msg_id = mappings.get(source_id, source_msg_id, target_id)
+                if target_msg_id is None:
+                    logger.info("跳过频道编辑（没有转发映射）：%s, target=%s", task.link, target_id)
+                    task.status = TaskStatus.COMPLETED
+                    return
+                # 出队后取源帖最新版本，避免较旧的编辑事件覆盖新正文。
+                source_peer = await task.event.get_input_chat()
+                current = await client.get_messages(source_peer, ids=source_msg_id)
+                if current is None:
+                    logger.info("跳过频道编辑（源帖已不可读取）：%s", task.link)
+                    task.status = TaskStatus.COMPLETED
+                    return
+                target_peer = await self.get_monitor_target_peer(client, target_id)
+                try:
+                    await client.edit_message(
+                        target_peer, target_msg_id, text=current.raw_text or "",
+                        formatting_entities=current.entities or [], parse_mode=None,
+                        link_preview=isinstance(current.media, types.MessageMediaWebPage),
+                    )
+                except errors.MessageNotModifiedError:
+                    pass
+                logger.info("已同步频道编辑：%s -> %s/%s", task.link, target_id, target_msg_id)
+            else:
+                pending = [mid for mid in message_ids if mappings.get(source_id, mid, target_id) is None]
+                if not pending:
+                    task.status = TaskStatus.COMPLETED
+                    return
+                source_peer = await task.event.get_input_chat()
+                target_peer = await self.get_monitor_target_peer(client, target_id)
+                reserved = mappings.reserve(source_id, target_id, pending)
+                if not reserved:
+                    task.status = (TaskStatus.UNCONFIRMED if any(mappings.get(source_id, mid, target_id) is None
+                                                               for mid in pending) else TaskStatus.COMPLETED)
+                    return
+                try:
+                    sent = await client(functions.messages.ForwardMessagesRequest(
+                        from_peer=source_peer, id=list(reserved), random_id=list(reserved.values()),
+                        to_peer=target_peer, drop_author=True,
+                    ))
+                except (errors.ChatWriteForbiddenError, errors.ChatForwardsRestrictedError,
+                        errors.ChatAdminRequiredError, errors.ChannelPrivateError):
+                    mappings.release_rejected(source_id, target_id, reserved)
+                    raise
+                except Exception as exc:
+                    raise CopyOutcomeUnknown(f"发送未获确认（{type(exc).__name__}），请核对源消息 {list(reserved)}") from exc
+                # Telegram 回传 random_id 到目标消息 ID 的映射；不能按相册顺序或频道最后一帖猜测。
+                by_random_id = {update.random_id: update.id for update in getattr(sent, 'updates', ())
+                                if isinstance(update, types.UpdateMessageID)}
+                pairs = {mid: by_random_id[rid] for mid, rid in reserved.items() if rid in by_random_id}
+                try:
+                    mappings.remember(source_id, target_id, pairs)
+                except sqlite3.Error as exc:
+                    raise CopyOutcomeUnknown("目标 ID 未能持久化，请核对后处理") from exc
+                unknown = [mid for mid in pending if mappings.get(source_id, mid, target_id) is None]
+                if unknown:
+                    raise CopyOutcomeUnknown(f"回执不完整；以下源消息待核对，不重发：{unknown}")
+                self.forward_log.add(task.link, target_id, True)
+                logger.info("已复制频道帖子并记录映射：%s -> %s, ids=%s", task.link, target_id, pairs)
+                await self.report_monitor_copy(f"✅ 自动复制成功：{task.link} → {target_id}")
+            task.status = TaskStatus.COMPLETED
+        except CopyOutcomeUnknown as exc:
+            task.status = TaskStatus.UNCONFIRMED
+            task.error_msg = str(exc)
+            logger.error("自动复制待核对：%s -> %s: %s", task.link, target_id, exc)
+            self.forward_log.add(task.link, target_id, False, str(exc))
+            await self.report_monitor_copy(f"⚠️ 自动复制结果待核对：{task.link} → {target_id}\n{exc}", failed=True)
+        except Exception as exc:
+            # 只重试编辑；重新出队会重读映射和最新正文，不执行任何复制请求。
+            if task.mode == "monitor_edit" and task.edit_retries < 2:
+                delay = None
+                if isinstance(exc, errors.FloodWaitError):
+                    delay = max(1, exc.seconds)
+                elif isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError,
+                                      errors.ServerError, errors.TimedOutError)):
+                    delay = 2 ** (task.edit_retries + 1)
+                if delay is not None:
+                    self.task_queue.retry_edit_later(task, delay)
+                    logger.warning("频道编辑 %s 秒后重试（%s/2）：%s", delay, task.edit_retries, task.link)
+                    return
+            task.error_msg = str(exc)
+            task.status = TaskStatus.FAILED
+            logger.error("频道同步失败（%s）：%s -> %s: %s", task.mode, task.link, target_id, exc, exc_info=True)
+            if task.mode == "monitor_copy":
+                self.forward_log.add(task.link, target_id, False, str(exc))
+                await self.report_monitor_copy(f"⚠️ 自动复制失败：{task.link} → {target_id}\n{exc}", failed=True)
 
     async def start_user_monitor(self) -> None:
-        if not self.user_client:
-            logger.info("用户账号监听未启用：未配置 USER_SESSION_STRING 或 USER_SESSION_FILE")
+        if not USER_MONITOR_ENABLED:
+            return
+        try:
+            if USER_SESSION_STRING and not USER_SESSION_STRING.startswith("填入"):
+                session = StringSession(USER_SESSION_STRING)
+            elif USER_SESSION_FILE:
+                session = USER_SESSION_FILE
+            else:
+                logger.info("用户账号监听未启用：未配置用户 session")
+                return
+            self.user_client = TelegramClient(session, API_ID, API_HASH)
+        except Exception as exc:
+            # 异常文本可能包含输入内容或路径，只记录类型。
+            logger.warning("用户 session 初始化失败（%s），回退到 Bot 监听", type(exc).__name__)
+            await self.notify_admins("⚠️ 用户 session 无效或无法读取，已回退到 Bot 监听。")
             return
 
         @self.user_client.on(events.NewMessage)
         async def user_monitor_handler(event):
             try:
-                if not await self.is_monitor_source(event):
-                    return
-                await self.handle_auto_monitor_event(event, "用户账号")
+                if event.message.grouped_id is None:
+                    await self.enqueue_monitor_post(event, [event.message])
             except Exception as e:
                 logger.error(f"用户账号监听消息处理异常: {e}", exc_info=True)
+
+        self.register_monitor_events(self.user_client)
 
         try:
             await self.user_client.connect()
@@ -1068,8 +1321,8 @@ class TelegramBot:
             self.user_monitor_running = True
             logger.info(f"用户账号监听已启动: id={me.id}, username={getattr(me, 'username', None)}")
         except Exception as e:
-            logger.error(f"用户账号监听启动失败: {e}", exc_info=True)
-            await self.notify_admins(f"⚠️ 用户账号监听启动失败: {e}")
+            logger.error("用户账号监听启动失败（%s），回退到 Bot 监听", type(e).__name__)
+            await self.notify_admins("⚠️ 用户账号监听启动失败，已回退到 Bot 监听。")
             try:
                 await self.user_client.disconnect()
             except Exception:
@@ -1077,14 +1330,17 @@ class TelegramBot:
 
     # ── Core forward logic ──────────────────────────────────────
 
-    async def do_forward(self, event, status_msg, auto: bool = False) -> None:
+    async def do_forward(self, event, status_msg) -> None:
         status_chat_id = getattr(status_msg, 'chat_id', event.chat_id)
-        if self.target_chat_id is None:
+        self.remember_forward_status(status_chat_id, status_msg.id)
+        target_id = self.target_chat_id
+        if target_id is None:
             await status_msg.edit("❌ 未配置目标频道ID，请管理员使用 /forwardto 设置")
             self.schedule_status_delete(status_msg, failed=True)
             return
 
-        if self.is_album(event):
+        is_album = self.is_album(event)
+        if is_album:
             gid = getattr(event.message, 'grouped_id', None)
             if gid and gid in self._album_processed:
                 logger.info(f"跳过 Album 后续消息: grouped_id={gid}")
@@ -1106,7 +1362,7 @@ class TelegramBot:
             self.schedule_status_delete(status_msg, failed=True)
             return
 
-        if self.is_album(event):
+        if is_album:
             link = self.add_single_param(link)
             logger.info(f"Album 消息添加 ?single 参数: {link}")
 
@@ -1114,14 +1370,13 @@ class TelegramBot:
         status_client = getattr(status_msg, 'client', None) or self.client
         position = await self.task_queue.add_task(
             event, link, status_msg.id, status_chat_id, gid,
-            status_client=status_client,
+            status_client=status_client, target_chat_id=target_id,
         )
-        source_label = "自动监听" if auto else "手动提交"
         await status_msg.edit(
-            f"⏳ 已加入转发队列（{source_label}）\n"
+            f"⏳ 已加入转发队列（手动提交）\n"
             f"队列位置: {position}\n"
             f"FROM: {link}\n"
-            f"TO:   {self.target_chat_id}"
+            f"TO:   {target_id}"
         )
 
     # ── Admin commands ──────────────────────────────────────────
@@ -1407,21 +1662,26 @@ class TelegramBot:
             # 用于显示的链接占位
             display_link = f"chat_id:{chat_id}"
 
+            target_id = self.target_chat_id
+            if target_id is None:
+                await event.respond("❌ 未配置目标频道ID，请先使用 /forwardto 设置")
+                return True
             status_msg = await event.respond("⏳ 正在加入范围导出队列...", _auto_delete=False)
+            self.remember_forward_status(status_msg.chat_id, status_msg.id)
             gid = None
             position = await self.task_queue.add_task(
                 event, display_link, status_msg.id, event.chat_id, gid,
                 mode="export_range",
                 message_ids=[start_id, end_id],
                 source_chat_id=chat_id,
-                status_client=getattr(status_msg, 'client', None) or self.client
+                status_client=getattr(status_msg, 'client', None) or self.client, target_chat_id=target_id,
             )
             await status_msg.edit(
                 f"⏳ 已加入范围导出队列\n"
                 f"队列位置: {position}\n"
                 f"源: {display_link}\n"
                 f"范围: {start_id}-{end_id}\n"
-                f"TO: {self.target_chat_id}"
+                f"TO: {target_id}"
             )
             return True
 
@@ -1471,8 +1731,10 @@ class TelegramBot:
         async def start_handler(event):
             if event.sender_id in ADMIN_IDS:
                 await event.respond(START_MESSAGE_ADMIN)
+            elif can_submit(event.sender_id):
+                await event.respond("🤖 你可以转发消息或发送 Telegram 消息链接。")
             else:
-                await event.respond("🤖 机器人已启动。请直接转发消息或发送 Telegram 消息链接。")
+                await event.respond("🤖 此机器人仅接受授权用户投稿。")
 
         @self.client.on(events.NewMessage)
         async def message_handler(event):
@@ -1505,26 +1767,32 @@ class TelegramBot:
                     if await self.handle_admin_command(event):
                         return
 
-                has_forward = bool(event.message.forward)
-                has_link = bool(self.extract_link(text))
-                is_auto_monitor = False if self.is_user_monitor_active() else await self.is_monitor_source(event)
+                if self.is_monitor_post(event.message):
+                    if not self.is_user_monitor_active() and event.message.grouped_id is None:
+                        await self.enqueue_monitor_post(event, [event.message])
+                    return
 
-                if has_forward or has_link or is_auto_monitor:
-                    if is_auto_monitor:
-                        await self.handle_auto_monitor_event(event, "bot")
-                    else:
-                        status_msg = await event.respond("⏳ 正在加入转发队列...")
-                        await self.do_forward(event, status_msg)
+                if (isinstance(event.message.peer_id, types.PeerChannel)
+                        and event.message.peer_id.channel_id == self.monitor_target_channel_id()):
+                    return  # 不把复制到目标频道的链接帖当作手动转发请求。
+
+                if event.out or not can_submit(event.sender_id):
+                    return
+                if event.message.forward or self.extract_link(text):
+                    status_msg = await event.respond("⏳ 正在加入转发队列...")
+                    await self.do_forward(event, status_msg)
 
             except Exception as e:
                 logger.error(f"消息处理异常: {e}", exc_info=True)
 
+        self.register_monitor_events(self.client, fallback=True)
+
         if self.monitor_chat_ids:
             logger.info(f"自动监听源频道已启用: {self.monitor_chat_ids}")
             if self.user_monitor_running:
-                logger.info("源频道新消息将由用户账号 Telethon client 监听，bot 只处理命令和状态消息")
+                logger.info("源频道的新消息及编辑将由用户账号 Telethon client 监听，bot 只处理命令和状态消息")
             else:
-                logger.info("用户账号监听未运行，将回退到 bot 推送监听；bot 必须是源频道管理员")
+                logger.info("用户账号监听未运行，将回退到 bot；bot 需要源频道读取权限及目标频道发帖和编辑权限")
         else:
             logger.info("自动监听源频道未配置")
 
@@ -1539,6 +1807,9 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"断开用户监听客户端时出错: {e}")
         await self.task_queue.stop()
+        if self._monitor_message_map is not None:
+            self._monitor_message_map.close()
+            self._monitor_message_map = None
         try:
             await self.client.disconnect()
         except Exception as e:
@@ -1547,6 +1818,10 @@ class TelegramBot:
 
 # ─────────────────────────── Entry ─────────────────────────────
 async def main() -> None:
+    missing = [name for name, valid in (("API_ID", API_ID > 0), ("API_HASH", API_HASH.strip()),
+                                        ("BOT_TOKEN", BOT_TOKEN.strip())) if not valid]
+    if missing:
+        raise SystemExit(f"请在 .env 或运行环境中配置：{', '.join(missing)}")
     bot = TelegramBot()
     try:
         await bot.start()

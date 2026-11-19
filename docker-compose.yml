@@ -5,35 +5,39 @@
     restart: unless-stopped
     volumes:
       - ./forward_history.json:/app/forward_history.json
+      - monitor-data:/data/monitor
       - /usr/local/bin/tdl:/usr/local/bin/tdl
       - ~/.tdl:/root/.tdl
     environment:
-      - TZ=Asia/Shanghai  # 强制指定时区变量
-      - API_ID=
-      - API_HASH=
-      - BOT_TOKEN=
-      - ADMIN_IDS=
-      - FORWARD_TO_CHAT_ID=
-      - MONITOR_CHAT_IDS=源频道裸ID
-      - USER_MONITOR_ENABLED=1
-      - USER_SESSION_STRING=填入gen-session输出的字符串
-      - AUTO_DELETE_BOT_MESSAGES=1
-      - AUTO_DELETE_STATUS_SECONDS=300
-      - AUTO_DELETE_COMMAND_SECONDS=120
-      - AUTO_DELETE_ERROR_SECONDS=600
+      TZ: "${TZ:-Asia/Shanghai}"
+      API_ID: "${API_ID:?请在 .env 中设置 API_ID}"
+      API_HASH: "${API_HASH:?请在 .env 中设置 API_HASH}"
+      # Validate in the bot process so gen-session can run with only the two API credentials.
+      BOT_TOKEN: "${BOT_TOKEN:-}"
+      ADMIN_IDS: "${ADMIN_IDS:-}"
+      SUBMITTER_IDS: "${SUBMITTER_IDS:-}"
+      FORWARD_TO_CHAT_ID: "${FORWARD_TO_CHAT_ID:-}"
+      MONITOR_CHAT_IDS: "${MONITOR_CHAT_IDS:-}"
+      MONITOR_MAP_FILE: /data/monitor/message_map.sqlite3
+      USER_MONITOR_ENABLED: "${USER_MONITOR_ENABLED:-1}"
+      USER_SESSION_STRING: "${USER_SESSION_STRING:-}"
+      AUTO_DELETE_BOT_MESSAGES: "${AUTO_DELETE_BOT_MESSAGES:-1}"
+      AUTO_DELETE_STATUS_SECONDS: "${AUTO_DELETE_STATUS_SECONDS:-300}"
+      AUTO_DELETE_COMMAND_SECONDS: "${AUTO_DELETE_COMMAND_SECONDS:-120}"
+      AUTO_DELETE_ERROR_SECONDS: "${AUTO_DELETE_ERROR_SECONDS:-600}"
 
   gen-session:
     build: .
     container_name: telegram-tdl-forwarder-gen-session
     profiles:
       - tools
-    volumes:
-      - ./gen_telethon_session.py:/app/gen_telethon_session.py
     environment:
-      - TZ=Asia/Shanghai
-      - API_ID=
-      - API_HASH=
+      TZ: "${TZ:-Asia/Shanghai}"
+      API_ID: "${API_ID:?请在 .env 中设置 API_ID}"
+      API_HASH: "${API_HASH:?请在 .env 中设置 API_HASH}"
     command: python3 -u gen_telethon_session.py
     stdin_open: true
     tty: true
 
+volumes:
+  monitor-data:

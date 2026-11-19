@@ -1,0 +1,6 @@
+# Deny by default: never send credentials, VCS data or runtime state to the builder.
+**
+!Dockerfile
+!requirements.txt
+!tdl-forward.py
+!gen_telethon_session.py

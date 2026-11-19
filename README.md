@@ -17,10 +17,10 @@
   向机器人发送文件、消息链接或转发消息后，可自动加入队列并转发到指定频道。
 
 - **用户账号监听源频道**  
-  可使用 Telethon 用户账号 session 监听源频道新消息，bot 只负责接收命令和发送状态消息。
+  可使用 Telethon 用户账号 session 监听源频道的新消息和编辑，bot 只负责接收命令和发送状态消息。
 
 - **自动监听频道转发**  
-  配置 `MONITOR_CHAT_IDS` 后，源频道出现新消息时可自动转发到目标频道。
+  配置 `MONITOR_CHAT_IDS` 后，源频道新帖会自动复制；编辑正文或媒体说明时，原地更新目标频道中的对应消息。
 
 - **转发历史记录**  
   自动保存转发记录，便于后续查询与管理。
@@ -77,7 +77,7 @@ chmod +x /usr/local/bin/tdl
 配置 TDL 目录权限：
 
 ```bash
-chmod -R 755 ~/.tdl
+chmod -R go-rwx ~/.tdl
 ```
 
 ---
@@ -161,7 +161,7 @@ MONITOR_CHAT_IDS=1234567890,9876543210
 /monitor set 1234567890,9876543210
 ```
 
-`/monitor` 命令只修改当前运行中的内存配置；容器重启后仍以 `docker-compose.yml` 或 `.env` 中的 `MONITOR_CHAT_IDS` 为准。
+`/monitor` 命令只修改当前运行中的内存配置；容器重启后仍以 `.env` 中的 `MONITOR_CHAT_IDS` 为准。
 
 ---
 
@@ -176,58 +176,21 @@ cd telegram-tdl-forwarder
 
 ---
 
-### 步骤 2：编辑 Docker Compose 配置
+### 步骤 2：配置本机 `.env`
 
-打开配置文件：
+首次部署时在项目目录执行（已有 `.env` 不要覆盖）：
 
 ```bash
-nano docker-compose.yml
+cp -n .env.example .env
+chmod 600 .env
+nano .env
 ```
 
-参考配置如下：
+填写 `API_ID`、`API_HASH`、`BOT_TOKEN`、`ADMIN_IDS` 和 `FORWARD_TO_CHAT_ID`。需要自动监听时再填写 `MONITOR_CHAT_IDS`。仅生成用户 session 时只需 `API_ID` 和 `API_HASH`。Compose 会将这些变量传给相应服务，不用修改 YAML；不要公开 `.env` 或已展开的 Compose 配置。
 
-```yaml
-services:
-  telegram-bot:
-    build: .
-    container_name: telegram-tdl-forwarder
-    restart: "no"
-    volumes:
-      - ./forward_history.json:/app/forward_history.json
-      - /usr/local/bin/tdl:/usr/local/bin/tdl
-      - ~/.tdl:/root/.tdl
-    environment:
-      - TZ=Asia/Shanghai
-      - API_ID=你的_API_ID
-      - API_HASH=你的_API_HASH
-      - BOT_TOKEN=你的_BOT_TOKEN
-      - ADMIN_IDS=你的_Telegram用户ID
-      - FORWARD_TO_CHAT_ID=接收频道ID
-      - MONITOR_CHAT_IDS=源频道裸ID
-      - USER_MONITOR_ENABLED=1
-      - USER_SESSION_STRING=填入gen-session输出的字符串
-      - AUTO_DELETE_BOT_MESSAGES=1
-      - AUTO_DELETE_STATUS_SECONDS=300
-      - AUTO_DELETE_COMMAND_SECONDS=120
-      - AUTO_DELETE_ERROR_SECONDS=600
+**默认只接受授权用户投稿。** 管理员可以手动提交链接和转发消息；要授权其他投稿者，在 `SUBMITTER_IDS` 中填写其 Telegram 用户 ID（逗号分隔）。投稿者没有管理权限。两份名单都为空时不接受手动投稿，已配置的源频道自动监听不受影响。`/forwardto` 的更改不会改变已入队任务的目标频道。
 
-  gen-session:
-    build: .
-    container_name: telegram-tdl-forwarder-gen-session
-    profiles:
-      - tools
-    volumes:
-      - ./gen_telethon_session.py:/app/gen_telethon_session.py
-    environment:
-      - TZ=Asia/Shanghai
-      - API_ID=你的_API_ID
-      - API_HASH=你的_API_HASH
-    command: python3 -u gen_telethon_session.py
-    stdin_open: true
-    tty: true
-```
-
-> 注意：请勿将真实的 `API_HASH`、`BOT_TOKEN`、`USER_SESSION_STRING` 等敏感信息公开上传到 GitHub 或分享给他人。
+**从旧版升级：** 先把旧 Compose 中填写的真实值迁到本机 `.env`，再切换到新版配置。若曾分享或推送包含凭证的旧镜像，请轮换 Bot Token 并撤销受影响的用户会话；重建镜像不能撤回旧凭证。
 
 ---
 
@@ -235,7 +198,7 @@ services:
 
 如果只手动给 bot 发送链接或转发消息，可以跳过本步骤。
 
-如果需要自动监听源频道新消息，推荐生成 `USER_SESSION_STRING`，让用户账号负责监听源频道。这样源频道不需要把 bot 设为管理员，只要这个用户账号已经加入源频道即可。
+如果需要自动监听源频道的新消息和编辑，推荐生成 `USER_SESSION_STRING`，让用户账号负责监听源频道。这样源频道不需要把 bot 设为管理员。用于监听的用户账号须能读取源频道，并且有权在目标频道发帖和编辑相应帖子。
 
 运行一次性服务：
 
@@ -261,10 +224,10 @@ docker-compose run --rm gen-session
 USER_SESSION_STRING=一大串字符串
 ```
 
-将这整行中的字符串填回 `docker-compose.yml`：
+将生成的值填回本机 `.env`：
 
-```yaml
-- USER_SESSION_STRING=一大串字符串
+```dotenv
+USER_SESSION_STRING=一大串字符串
 ```
 
 `USER_SESSION_STRING` 等同于该 Telegram 用户账号的登录凭证，请妥善保存，不要泄露。
@@ -291,10 +254,10 @@ docker-compose logs -f
 
 ```text
 用户账号监听已启动
-源频道新消息将由用户账号 Telethon client 监听，bot 只处理命令和状态消息
+源频道的新消息及编辑将由用户账号 Telethon client 监听，bot 只处理命令和状态消息
 ```
 
-如果没有配置 `USER_SESSION_STRING` 或 session 无效，程序会回退到 bot 推送监听。此时 bot 必须是源频道管理员，否则 Telegram 不会把频道新消息推送给 bot。
+如果没有配置 `USER_SESSION_STRING` 或 session 无效，程序会回退到 bot 推送监听。此时 bot 必须是源频道管理员，否则 Telegram 不会把频道消息更新推送给 bot。
 
 ---
 
@@ -329,22 +292,28 @@ docker-compose logs -f
 
 ### 自动监听源频道
 
-配置 `MONITOR_CHAT_IDS` 和 `USER_SESSION_STRING` 后，源频道有新消息时会自动加入转发队列。
+配置 `MONITOR_CHAT_IDS` 后，程序使用正在监听的 Telethon 账号自动复制源频道新帖，并记录 Telegram 返回的目标消息 ID。自动复制不展开帖内的其他链接；手动提交链接和范围转发仍使用 TDL。
+
+- **原地更新**：收到编辑事件后，只更新当前目标频道中已经建立映射的那条消息的正文或媒体说明（含格式），保留目标消息 ID 和链接。相册只更新被编辑的成员；不会替换媒体文件、删除目标帖或另发一条。
+- **没有映射只记日志**：升级前的转发、手动转发和旧目标频道的记录不会被猜测匹配。程序不扫描历史编辑，目标消息已删除或无法编辑时也不会重发。
+- **发送结果未知**：首次复制前先把每条源消息的请求 ID 写入 SQLite。回执不完整、连接中断或服务中途退出时，只保存可确认的目标 ID；其余项保留在 `monitor_copy_intents` 供人工核对，重复事件不会再次发送。不要为了重试而直接删除这些记录。旧版已确认的映射可继续使用。
+- **临时编辑失败**：连接问题或限流最多重试两次，每次重新读取最新正文。等待期间不占用转发队列；目标已删除、权限不足等错误不重发。等待中的编辑重试保存在内存，停止服务或 `/tdlstop` 会取消。
+- **持久化**：Compose 的 `monitor-data` 卷保存 SQLite 映射；保留它，重建容器后才能继续更新原帖。不要用 `docker compose down -v` 删除该卷。非 Compose 部署可用 `MONITOR_MAP_FILE` 指定持久化路径。映射独立于 `forward_history.json`。
 
 推荐配置：
 
-```yaml
-- MONITOR_CHAT_IDS=1234567890
-- USER_MONITOR_ENABLED=1
-- USER_SESSION_STRING=一大串字符串
+```dotenv
+MONITOR_CHAT_IDS=1234567890
+USER_MONITOR_ENABLED=1
+USER_SESSION_STRING=一大串字符串
 ```
 
 权限要求：
 
-- 使用用户账号监听时：生成 session 的用户账号必须已经加入源频道。
-- 回退到 bot 监听时：bot 必须是源频道管理员。
-- tdl 登录账号需要有源频道读取权限。
-- bot 和 tdl 登录账号需要有目标频道发帖权限。
+- 用户账号监听：用户账号须加入源频道，并拥有目标频道的发帖和编辑相应帖子的权限。
+- Bot 回退监听：Bot 须为源频道管理员，并拥有目标频道的发帖和编辑相应帖子的权限。
+- 自动复制走 Telegram 服务端，遵守源频道的转发限制；若无法复制，不会回退到无法记录映射的 TDL 转发。
+- 手动 TDL 转发仍要求 TDL 登录账号能读取源频道并向目标频道发帖。
 
 ### 查看帮助
 
@@ -416,6 +385,7 @@ docker-compose build --no-cache && docker-compose up -d
 ```yaml
 volumes:
   - ./forward_history.json:/app/forward_history.json
+  - monitor-data:/data/monitor
   - /usr/local/bin/tdl:/usr/local/bin/tdl
   - ~/.tdl:/root/.tdl
 ```
@@ -423,6 +393,7 @@ volumes:
 说明：
 
 - `forward_history.json`：保存转发历史记录。
+- `monitor-data`：保存源消息与目标消息 ID 的映射，不随转发历史清理。
 - `/usr/local/bin/tdl`：挂载宿主机的 TDL 可执行文件。
 - `~/.tdl`：挂载宿主机的 TDL 登录会话与配置目录。
 
@@ -451,3 +422,7 @@ restart: unless-stopped
 
 本项目基于 [MIT License](LICENSE) 开源。
 
+
+## 离线回归测试
+
+安装 `requirements.txt` 后，在仓库根目录运行 `python -m unittest discover -s tests -v`；测试不需要真实 Telegram 凭证。
