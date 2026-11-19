@@ -2,12 +2,18 @@
 import re
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import asyncio
 import time
 import sys
-import subprocess
+from collections import deque
+from contextlib import closing
+from pathlib import Path
+from urllib.parse import parse_qsl
 import tempfile
 import secrets
+import signal
+import socket
 import sqlite3
 from telethon import TelegramClient, errors, events, functions, types, utils
 from telethon.sessions import MemorySession, StringSession
@@ -16,17 +22,27 @@ from dataclasses import dataclass
 from enum import Enum
 
 # ─────────────────────────── Logging ───────────────────────────
-logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
-logging.getLogger('telethon').setLevel(logging.WARNING)
-logging.getLogger('asyncio').setLevel(logging.WARNING)
+
+
+def configure_logging() -> None:
+    handlers = [logging.StreamHandler()]
+    try:
+        handlers.append(RotatingFileHandler("bot.log", maxBytes=5 * 1024 * 1024, backupCount=3,
+                                            encoding="utf-8", errors="backslashreplace"))
+    except OSError as exc:
+        file_error = type(exc).__name__
+    else:
+        file_error = None
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=handlers)
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    if file_error:
+        logger.warning("无法打开 bot.log（%s），日志仅写入标准错误", file_error)
+
+
+if __name__ == "__main__":
+    configure_logging()
 
 # ─────────────────────────── Config ────────────────────────────
 try:
@@ -34,14 +50,17 @@ try:
 except ValueError:
     raise SystemExit("配置错误：API_ID 必须是正整数") from None
 API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 USER_SESSION_STRING = os.getenv("USER_SESSION_STRING", "").strip()
 USER_SESSION_FILE = os.getenv("USER_SESSION_FILE", "").strip()
 USER_MONITOR_ENABLED = os.getenv("USER_MONITOR_ENABLED", "1").lower() not in ("0", "false", "no", "off")
 TDL_PATH = "/usr/local/bin/tdl"
-FORWARD_LOG_FILE = "forward_history.json"
+FORWARD_LOG_FILE = os.getenv("FORWARD_LOG_FILE") or "forward_history.json"
 FORWARD_LOG_MAX_DAYS = 7  # 保留最近7天
 MONITOR_MAP_FILE = os.getenv("MONITOR_MAP_FILE", "").strip() or "monitor_message_map.sqlite3"
+MAX_CHANNEL_ID = 997_852_516_352  # MTProto channel/supergroup range.
+MANUAL_ALBUM_CACHE_SIZE = 500
+USER_MONITOR_RETRY_SECONDS = 30
 MONITOR_CLEANUP_INTERVAL = 7 * 86400
 try:
     MONITOR_MAP_RETENTION_DAYS = int(os.getenv("MONITOR_MAP_RETENTION_DAYS") or 7)
@@ -49,12 +68,25 @@ try:
         raise ValueError
 except ValueError:
     raise SystemExit("MONITOR_MAP_RETENTION_DAYS 必须是 0 到 36500 之间的整数（0 表示不清理）") from None
-TELEGRAM_LINK_PATTERN = re.compile(r"https://t\.me/(?:c/)?[A-Za-z0-9_]+/\d+")
+TELEGRAM_LINK_PATTERN = re.compile(
+    r"https://t\.me/(?:c/[1-9][0-9]*|(?!c/)[A-Za-z0-9_]+)/[1-9][0-9]*(?=/(?:[?#\s]|$)|(?![A-Za-z0-9_/%-]))"
+)
 EXCLUDE_KEYWORDS = ["addlist"]
 AUTO_DELETE_BOT_MESSAGES = os.getenv("AUTO_DELETE_BOT_MESSAGES", "1").lower() not in ("0", "false", "no", "off")
-AUTO_DELETE_STATUS_SECONDS = int(os.getenv("AUTO_DELETE_STATUS_SECONDS", "300"))
-AUTO_DELETE_COMMAND_SECONDS = int(os.getenv("AUTO_DELETE_COMMAND_SECONDS", "120"))
-AUTO_DELETE_ERROR_SECONDS = int(os.getenv("AUTO_DELETE_ERROR_SECONDS", "600"))
+
+
+def delete_delay(name: str, default: int) -> int:
+    value = os.getenv(name, '').strip()
+    if not value:
+        return default
+    if not re.fullmatch(r'[0-9]{1,10}', value) or int(value) > 2_147_483_647:
+        raise SystemExit(f"配置错误：{name} 必须是 0 到 2147483647 之间的秒数（0 表示不删除）")
+    return int(value)
+
+
+AUTO_DELETE_STATUS_SECONDS = delete_delay("AUTO_DELETE_STATUS_SECONDS", 300)
+AUTO_DELETE_COMMAND_SECONDS = delete_delay("AUTO_DELETE_COMMAND_SECONDS", 120)
+AUTO_DELETE_ERROR_SECONDS = delete_delay("AUTO_DELETE_ERROR_SECONDS", 600)
 
 
 def monitor_visual_media(media) -> Optional[types.InputMediaPhoto | types.InputMediaDocument]:
@@ -89,6 +121,13 @@ class CopyOutcomeUnknown(Exception):
     """已保留发送意图，不能证明 Telegram 未发送。"""
 
 
+@dataclass(frozen=True)
+class RejectedCopy:
+    # InputPeer access hashes and random IDs must stay with the account that made the request.
+    client: TelegramClient
+    request: functions.messages.ForwardMessagesRequest
+
+
 @dataclass
 class ForwardTask:
     event: events.NewMessage.Event | events.Album.Event
@@ -104,7 +143,31 @@ class ForwardTask:
     mode: str = "clone"  # clone、export_range、monitor_copy、monitor_edit
     message_ids: Optional[list[int]] = None
     source_chat_id: Optional[int] = None
-    edit_retries: int = 0
+    retries: int = 0
+    edit_dirty: bool = False
+    # Only set while waiting after an explicit RPC rejection, never during an in-flight send.
+    rejected_copy: Optional[RejectedCopy] = None
+
+    @property
+    def edit_key(self):
+        return (self.source_chat_id, self.message_ids[0], self.target_chat_id)
+
+
+async def edit_status(message, text: str) -> None:
+    if message is None:
+        return
+    try:
+        await message.edit(text)
+    except Exception as exc:
+        logger.debug("状态提示未更新：%s", type(exc).__name__)
+
+
+async def send_status(event, text: str):
+    try:
+        return await event.respond(text)
+    except Exception as exc:
+        logger.warning("无法发送状态提示（%s），不影响任务执行", type(exc).__name__)
+        return None
 
 
 class TaskQueue:
@@ -114,85 +177,117 @@ class TaskQueue:
         self.current_task: Optional[ForwardTask] = None
         self.worker_task: Optional[asyncio.Task] = None
         self.running = False
+        self._control = asyncio.Lock()
+        self._resume = asyncio.Event()
+        self._resume.set()
         self.task_counter = 0
-        self._retry_timers: set[asyncio.TimerHandle] = set()
+        self._retry_timers: dict[asyncio.TimerHandle, ForwardTask] = {}
+        self._edits: dict[tuple[int, int, int], ForwardTask] = {}
 
     async def start(self):
-        self.running = True
-        self.worker_task = asyncio.create_task(self._worker())
-        logger.info("任务队列已启动")
+        async with self._control:
+            if self.worker_task is not None and not self.worker_task.done():
+                return
+            self.running = True
+            self.worker_task = asyncio.create_task(self._worker())
+            logger.info("任务队列已启动")
 
     async def stop(self):
-        self.running = False
-        self.cancel_delayed_edits()
-        if self.worker_task:
-            self.worker_task.cancel()
-            try:
-                await self.worker_task
-            except asyncio.CancelledError:
-                pass
-        logger.info("任务队列已停止")
+        async with self._control:
+            self.running = False
+            if self.worker_task and not self.worker_task.done():
+                self.worker_task.cancel()
+                await asyncio.gather(self.worker_task, return_exceptions=True)
+            await self.clear_pending_tasks(notify=False)
+            logger.info("任务队列已停止")
 
-    async def _edit_task_status(self, task: ForwardTask, text: str):
-        if task.status_msg_id is None:
-            return None
-        try:
-            status_client = task.status_client or task.event.client
-            status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
-            if status_msg:
-                await status_msg.edit(text)
-            return status_msg
-        except Exception as e:
-            logger.debug(f"更新任务状态失败: {e}")
+    async def _get_status(self, task: ForwardTask):
+        if task.status_msg_id is not None:
+            try:
+                client = task.status_client or task.event.client
+                return await client.get_messages(task.chat_id, ids=task.status_msg_id)
+            except Exception as exc:
+                logger.debug("无法读取状态提示：%s", type(exc).__name__)
         return None
 
-    def retry_edit_later(self, task: ForwardTask, delay: float) -> None:
+    def retry_later(self, task: ForwardTask, delay: float) -> None:
         # 不让单帖的 FloodWait 阻塞其他已排队的任务。
         def requeue():
-            self._retry_timers.discard(timer)
+            self._retry_timers.pop(timer, None)
             self.queue.put_nowait(task)
 
-        task.edit_retries += 1
+        task.retries += 1
         task.status = TaskStatus.PENDING
         timer = asyncio.get_running_loop().call_later(delay, requeue)
-        self._retry_timers.add(timer)
+        self._retry_timers[timer] = task
 
-    def cancel_delayed_edits(self) -> int:
-        count = len(self._retry_timers)
+    def _take_pending(self) -> list[ForwardTask]:
+        pending = list(self._retry_timers.values())
         for timer in self._retry_timers:
             timer.cancel()
         self._retry_timers.clear()
-        return count
-
-    async def clear_pending_tasks(self) -> int:
-        cleared = self.cancel_delayed_edits()
-        while True:
-            try:
-                task = self.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            task.status = TaskStatus.FAILED
-            task.error_msg = "管理员已停止并清空等待队列"
-            status_msg = await self._edit_task_status(task, "⏹️ 已被管理员停止，等待队列已清空")
-            self.bot.schedule_status_delete(status_msg, failed=True)
+        while not self.queue.empty():
+            pending.append(self.queue.get_nowait())
             self.queue.task_done()
-            cleared += 1
-        return cleared
+        if self.current_task:
+            self.current_task.edit_dirty = False
+        for task in pending:
+            if task.mode == "monitor_edit":
+                self._edits.pop(task.edit_key, None)
+        return pending
 
-    async def mark_current_task_stopped(self) -> bool:
-        task = self.current_task
-        if not task or task.mode in ("monitor_copy", "monitor_edit"):
-            return False
-        task.status = TaskStatus.FAILED
-        task.error_msg = "管理员已停止 TDL 进程"
-        status_msg = await self._edit_task_status(task, "⏹️ 已被管理员停止，当前 TDL 进程已终止")
-        self.bot.schedule_status_delete(status_msg, failed=True)
-        return True
+    async def clear_pending_tasks(self, *, notify: bool = True) -> int:
+        return await self._finish_pending(self._take_pending(), notify)
+
+    async def _finish_pending(self, pending, notify: bool) -> int:
+        for task in pending:
+            task.status = TaskStatus.FAILED
+            task.error_msg = "已停止并清空等待队列"
+            if task.rejected_copy is not None:
+                try:
+                    await self.bot.release_rejected_request(task, task.rejected_copy.request)
+                except (sqlite3.Error, OSError):
+                    # Keep the reservation; never replay or clear unrelated unknown outcomes.
+                    task.error_msg += "；未能释放发送记录，需人工核对"
+                    logger.exception("停止任务时释放发送记录失败：%s -> %s", task.link, task.target_chat_id)
+                else:
+                    task.rejected_copy = None
+            if notify:
+                msg = await self._get_status(task)
+                await edit_status(msg, "⏹️ " + task.error_msg)
+                self.bot.schedule_status_delete(msg, failed=True)
+        return len(pending)
+
+    async def stop_tdl_tasks(self) -> tuple[bool, int]:
+        async with self._control:
+            # No await until the worker, its current task and all previously queued work are fixed.
+            self._resume.clear()
+            worker, current = self.worker_task, self.current_task
+            pending = self._take_pending()
+            manual = current is not None and current.mode in ("clone", "export_range") and current.status == TaskStatus.PROCESSING
+            cancel_worker = worker is not None and not worker.done() and (current is None or manual)
+            try:
+                if cancel_worker:
+                    worker.cancel()
+                    await asyncio.gather(worker, return_exceptions=True)  # Includes child-process cleanup.
+                if manual:
+                    current.status, current.error_msg = TaskStatus.FAILED, "管理员已停止 TDL 任务"
+                    msg = await self._get_status(current)
+                    await edit_status(msg, "⏹️ 当前 TDL 任务已被管理员停止")
+                    self.bot.schedule_status_delete(msg, failed=True)
+                cleared = await self._finish_pending(pending, True)
+                return manual, cleared
+            finally:
+                self._resume.set()
+                if cancel_worker and self.running:
+                    self.worker_task = asyncio.create_task(self._worker())
 
     async def add_task(self, event, link: str, status_msg_id: Optional[int], chat_id: int,
                        grouped_id: Optional[int] = None, mode: str = "clone",
                        message_ids: Optional[list[int]] = None, source_chat_id: Optional[int] = None,
-                       status_client: Optional[TelegramClient] = None, *, target_chat_id: int) -> int:
+                       status_client: Optional[TelegramClient] = None, *, target_chat_id: int) -> Optional[int]:
+        if self.bot._stopping:
+            return None  # The queue may already be drained and its worker gone.
         self.task_counter += 1
         task = ForwardTask(
             event=event,
@@ -207,7 +302,15 @@ class TaskQueue:
             source_chat_id=source_chat_id,
             target_chat_id=target_chat_id,
         )
-        await self.queue.put(task)
+        if mode == "monitor_edit":
+            existing = self._edits.get(task.edit_key)
+            if existing is not None:
+                existing.event = event
+                if existing.status == TaskStatus.PROCESSING:
+                    existing.edit_dirty = True
+                return self.queue.qsize()
+            self._edits[task.edit_key] = task
+        self.queue.put_nowait(task)
         position = self.queue.qsize()
         logger.info(f"任务已加入队列，位置: {position}, mode: {mode}")
         return position
@@ -215,20 +318,20 @@ class TaskQueue:
     async def _worker(self):
         while self.running:
             try:
+                await self._resume.wait()
                 task = await self.queue.get()
                 self.current_task = task
                 task.status = TaskStatus.PROCESSING
-                await self._process_task(task)
-                self.queue.task_done()
-                self.current_task = None
+                try:
+                    await self._process_task(task)
+                except Exception as exc:
+                    task.status, task.error_msg = TaskStatus.FAILED, str(exc)
+                    logger.exception("队列处理异常")
+                finally:
+                    self.queue.task_done()
+                    self.current_task = None
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"队列处理异常: {e}", exc_info=True)
-                if self.current_task:
-                    self.current_task.status = TaskStatus.FAILED
-                    self.current_task.error_msg = str(e)
-                self.current_task = None
 
     def _clean_progress_line(self, line: str, max_len: int = 800) -> str:
         clean_line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', line).strip()
@@ -245,174 +348,72 @@ class TaskQueue:
             text = text[-max_len:]
         return text
 
-    async def _edit_progress(self, status_msg, header: str, details: list[str], line: str) -> None:
-        now = time.time()
-        last_update = getattr(status_msg, '_last_progress_update', 0)
-        if now - last_update < 2:
-            return
-
-        setattr(status_msg, '_last_progress_update', now)
-        clean_line = self._clean_progress_line(line)
-
-        text = "\n".join([header, *details, "", "进度输出：", clean_line])
-        if len(text) > 3900:
-            text = text[:3900]
-
-        try:
-            await status_msg.edit(text)
-        except Exception as e:
-            logger.debug(f"更新进度消息失败: {e}")
-
     async def _process_task(self, task: ForwardTask):
-        if task.mode in ("monitor_copy", "monitor_edit"):
+        if task.mode == "monitor_edit":
+            task.status = TaskStatus.PROCESSING
+            task.edit_dirty = False
+            try:
+                await self.bot.process_monitor_task(task)
+            except BaseException:
+                self._edits.pop(task.edit_key, None)
+                raise
+            if task.status != TaskStatus.PENDING:  # A delayed retry already reads the latest source.
+                if task.edit_dirty:
+                    task.status, task.retries = TaskStatus.PENDING, 0
+                    self.queue.put_nowait(task)
+                else:
+                    self._edits.pop(task.edit_key, None)
+            return
+        if task.mode == "monitor_copy":
             await self.bot.process_monitor_task(task)
             return
 
+        msg = await self._get_status(task)
+        target = task.target_chat_id
+        details = [f"源：{task.link}", f"目标：{target}"]
+        title = "正在转发"
+
+        last_update = None
+
+        async def progress(line):
+            nonlocal last_update
+            now = time.monotonic()
+            if msg is None or (last_update is not None and now - last_update < 2):
+                return
+            last_update = now
+            text = "\n".join([title, *details, "", "进度输出：", self._clean_progress_line(line)])
+            await edit_status(msg, text[:3900])
+
         try:
-            status_client = task.status_client or task.event.client
-            status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
-            if not status_msg:
-                logger.error("无法获取状态消息")
-                return
-
-            target_id = task.target_chat_id
-            if target_id is None:
-                await status_msg.edit("❌ 未配置目标频道ID")
-                task.status = TaskStatus.FAILED
-                task.error_msg = "未配置目标频道ID"
-                return
-
+            if target is None:
+                raise ValueError("未配置目标频道 ID")
             if task.mode == "clone":
-                await status_msg.edit(
-                    f"🔄 正在转发（队列中）...\n"
-                    f"FROM: {task.link}\n"
-                    f"TO:   {target_id}"
-                )
-                progress_details = [
-                    f"FROM: {task.link}",
-                    f"TO:   {target_id}",
-                ]
-
-                async def update_clone_progress(line: str) -> None:
-                    await self._edit_progress(status_msg, "🔄 正在转发...", progress_details, line)
-
-                ok, output = await self.bot.tdl.forward_clone(task.link, target_id, update_clone_progress)
-                self.bot.forward_log.add(task.link, target_id, ok, "" if ok else output)
-
-                last_output = self._format_last_output(output)
-                last_output_text = f"\n\n最后输出：\n{last_output}" if last_output else ""
-                if ok:
-                    await status_msg.edit(
-                        f"✅ 转发成功\n"
-                        f"FROM: {task.link}\n"
-                        f"TO:   {target_id}"
-                        f"{last_output_text}"
-                    )
-                    task.status = TaskStatus.COMPLETED
-                else:
-                    await status_msg.edit(
-                        f"❌ 转发失败\n"
-                        f"FROM: {task.link}\n"
-                        f"错误: {output}"
-                    )
-                    task.status = TaskStatus.FAILED
-                    task.error_msg = output
-
+                await edit_status(msg, "\n".join([title, *details]))
+                ok, output = await self.bot.tdl.forward_clone(task.link, target, progress)
             elif task.mode == "export_range":
-                await status_msg.edit(
-                    f"📥 正在导出消息范围...\n"
-                    f"源: {task.link}\n"
-                    f"范围: {task.message_ids[0]}-{task.message_ids[1]}"
-                )
-                with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-                    export_file = tmp.name
-                try:
-                    export_details = [
-                        f"源: {task.link}",
-                        f"范围: {task.message_ids[0]}-{task.message_ids[1]}",
-                    ]
-
-                    async def update_export_progress(line: str) -> None:
-                        await self._edit_progress(status_msg, "📥 正在导出消息范围...", export_details, line)
-
-                    ok, output = await self.bot.tdl.export_range(
-                        task.source_chat_id,
-                        task.message_ids[0],
-                        task.message_ids[1],
-                        export_file,
-                        update_export_progress,
-                    )
-                    if not ok:
-                        last_output = self._format_last_output(output)
-                        last_output_text = f"\n\n最后输出：\n{last_output}" if last_output else ""
-                        await status_msg.edit(
-                            f"❌ 导出失败\n"
-                            f"源: {task.link}\n"
-                            f"范围: {task.message_ids[0]}-{task.message_ids[1]}"
-                            f"{last_output_text}"
-                        )
-                        task.status = TaskStatus.FAILED
-                        task.error_msg = output
-                        return
-
-                    await status_msg.edit(
-                        f"📤 正在转发导出文件...\n"
-                        f"文件: {os.path.basename(export_file)}"
-                    )
-                    forward_details = [
-                        f"文件: {os.path.basename(export_file)}",
-                        f"TO: {target_id}",
-                    ]
-
-                    async def update_forward_progress(line: str) -> None:
-                        await self._edit_progress(status_msg, "📤 正在转发导出文件...", forward_details, line)
-
-                    ok, output = await self.bot.tdl.forward_from_export(export_file, target_id, update_forward_progress)
-                    self.bot.forward_log.add(task.link, target_id, ok, "" if ok else output)
-
-                    last_output = self._format_last_output(output)
-                    last_output_text = f"\n\n最后输出：\n{last_output}" if last_output else ""
+                first, last = task.message_ids
+                details.append(f"范围：{first}-{last}")
+                with tempfile.TemporaryDirectory() as directory:
+                    export_file = os.path.join(directory, "export.json")
+                    title = "正在导出消息范围"
+                    await edit_status(msg, "\n".join([title, *details]))
+                    ok, output = await self.bot.tdl.export_range(task.source_chat_id, first, last, export_file, progress)
                     if ok:
-                        await status_msg.edit(
-                            f"✅ 导出+转发成功 (范围)\n"
-                            f"源: {task.link}\n"
-                            f"范围: {task.message_ids[0]}-{task.message_ids[1]}\n"
-                            f"TO: {target_id}"
-                            f"{last_output_text}"
-                        )
-                        task.status = TaskStatus.COMPLETED
-                    else:
-                        await status_msg.edit(
-                            f"❌ 导出+转发失败 (范围)\n"
-                            f"源: {task.link}\n"
-                            f"范围: {task.message_ids[0]}-{task.message_ids[1]}\n"
-                            f"错误: {output}"
-                        )
-                        task.status = TaskStatus.FAILED
-                        task.error_msg = output
-                finally:
-                    if os.path.exists(export_file):
-                        os.remove(export_file)
+                        title = "正在转发导出文件"
+                        await edit_status(msg, "\n".join([title, *details]))
+                        ok, output = await self.bot.tdl.forward_from_export(export_file, target, progress)
+            else:
+                raise ValueError(f"未知任务类型：{task.mode}")
+        except Exception as exc:
+            logger.exception("TDL 任务执行异常")
+            ok, output = False, str(exc)
 
-        except Exception as e:
-            logger.error(f"任务处理异常: {e}", exc_info=True)
-            task.status = TaskStatus.FAILED
-            task.error_msg = str(e)
-            try:
-                status_client = task.status_client or task.event.client
-                status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
-                if status_msg:
-                    await status_msg.edit(f"❌ 处理异常: {e}")
-            except Exception:
-                pass
-        finally:
-            if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-                try:
-                    status_client = task.status_client or task.event.client
-                    status_msg = await status_client.get_messages(task.chat_id, ids=task.status_msg_id)
-                    self.bot.schedule_status_delete(status_msg, failed=task.status == TaskStatus.FAILED)
-                except Exception as e:
-                    logger.debug(f"安排状态消息自动删除失败: {e}")
+        # Finalize delivery before touching Telegram notifications. A deleted status is not a cancellation.
+        task.status = TaskStatus.COMPLETED if ok else TaskStatus.FAILED
+        task.error_msg = "" if ok else output
+        self.bot.forward_log.add(task.link, target, ok, task.error_msg)
+        await edit_status(msg, "\n".join(["✅ 任务成功" if ok else "❌ 任务失败", *details, self._format_last_output(output)]))
+        self.bot.schedule_status_delete(msg, failed=not ok)
 
     def get_queue_status(self) -> dict:
         return {
@@ -436,7 +437,7 @@ START_MESSAGE_ADMIN = (
     '4. 配置 MONITOR_CHAT_IDS 后，自动复制源频道新帖并原地同步正文和说明的编辑\n\n'
     '【管理员命令】\n'
     '/forwardto <频道ID>\n'
-    '  设置或修改目标频道，使用 tdl 可识别的裸 ID，不需要加 -100 前缀\n'
+    '  设置或修改目标频道，可使用频道裸 ID 或 Telegram 标记后的频道 ID\n'
     '  示例：/forwardto 1234567890\n\n'
     '/showto\n'
     '  查看当前目标频道 ID\n\n'
@@ -453,7 +454,7 @@ START_MESSAGE_ADMIN = (
     '/monitor clear\n'
     '  清空自动监听源频道列表\n\n'
     '/tdlstop\n'
-    '  停止当前正在运行的 tdl 进程，并清空等待队列\n\n'
+    '  停止当前手动 TDL 任务，清空当时的等待队列和定时重试；不强停在途自动同步\n\n'
     '/queue\n'
     '  查看当前等待中的转发任务数量\n\n'
     '/flog\n'
@@ -481,109 +482,95 @@ START_MESSAGE_ADMIN = (
 
 
 # ─────────────────────────── Helpers ───────────────────────────
-def parse_admin_ids(raw: str) -> list[int]:
-    result = []
+def parse_admin_ids(raw: str, name: str = 'ADMIN_IDS') -> list[int]:
+    result = {}
     for item in raw.split(','):
         item = item.strip()
         if not item:
             continue
-        try:
-            result.append(int(item))
-        except ValueError:
-            logger.warning(f"忽略无效管理员ID: {item}")
-    return result
+        if not re.fullmatch(r'[0-9]{1,19}', item) or not 0 < int(item) < 2**63:
+            logger.warning("忽略 %s 中的无效用户 ID（须为正整数）", name)
+            continue
+        result[int(item)] = None  # Keep notification order without notifying twice.
+    return list(result)
 
 
 def parse_chat_id(text: str) -> Optional[int]:
-    try:
-        return int(text.strip())
-    except (ValueError, AttributeError):
+    value = text.strip()
+    if not value.startswith('-'):
+        return parse_monitor_chat_id(value)
+    if not re.fullmatch(r'-[0-9]{13}', value):
         return None
+    marked = int(value)
+    bare, peer_type = utils.resolve_id(marked)
+    return marked if peer_type is types.PeerChannel and 1 <= bare <= MAX_CHANNEL_ID else None
 
 
-def strip_url_query(text: str) -> str:
-    return text.strip().split('?', 1)[0].rstrip('/')
+def targets_submessage(query: str) -> bool:
+    return any(key.lower() in {'comment', 'thread'} for key, _ in parse_qsl(query, keep_blank_values=True))
 
 
 def parse_private_channel_link(text: str) -> tuple[Optional[int], Optional[int]]:
-    """解析 t.me/c/<chat_id>[/message_id] 链接。
-
-    返回: (chat_id, message_id)。频道链接没有 message_id 时返回 (chat_id, None)。
-    公开用户名链接无法得到 tdl 裸 Chat ID，因此不在这里解析。
-    """
-    link = strip_url_query(text)
-    match = re.match(r"https?://t\.me/c/(-?\d+)(?:/(\d+))?/?$", link)
+    """Return the bare channel and optional post. A comment/thread is not its parent post."""
+    path, _, query = text.partition('?')
+    if targets_submessage(query):
+        return None, None
+    match = re.fullmatch(r"https?://t\.me/c/([1-9][0-9]{0,18})(?:/([0-9]{1,10}))?/?", path)
     if not match:
         return None, None
-
-    chat_id = int(match.group(1))
-    message_id = int(match.group(2)) if match.group(2) else None
-    return chat_id, message_id
+    return int(match[1]), int(match[2]) if match[2] is not None else None
 
 
 def parse_export_range_args(parts: list[str]) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str]]:
-    """解析 /export_range 参数。
+    """Accept exactly a chat + two IDs, or a starting post + one ID/post in the same chat."""
+    def invalid(reason):
+        return None, None, None, reason
 
-    支持:
-    - /export_range <Chat ID> <起始ID> <结束ID>
-    - /export_range <频道链接> <起始ID> <结束ID>
-    - /export_range <起始消息链接> <结束消息链接>
-    - /export_range <消息链接> <结束ID>
-    """
+    def message_id(value):
+        return int(value) if re.fullmatch(r'[0-9]{1,10}', value) else None
+
     args = parts[1:]
-    if len(args) < 2:
-        return None, None, None, "missing"
+    if not args:
+        return invalid('missing')
+    source = args[0]
+    if source.startswith(('http://', 'https://')):
+        chat_id, start = parse_private_channel_link(source)
+        if chat_id is None:
+            return invalid('invalid_source_link')
+    else:
+        chat_id = int(source) if re.fullmatch(r'-?[0-9]{1,19}', source) else None
+        start = None
+    if not chat_id or not -(2**63) <= chat_id < 2**63:
+        return invalid('invalid_range_id')
 
-    first_chat_id, first_msg_id = parse_private_channel_link(args[0])
-
-    if first_chat_id is not None:
-        if first_msg_id is not None:
-            if len(args) < 2:
-                return None, None, None, "missing_end_id"
-
-            second_chat_id, second_msg_id = parse_private_channel_link(args[1])
-            if second_chat_id is not None:
-                if second_chat_id != first_chat_id:
-                    return None, None, None, "chat_mismatch"
-                if second_msg_id is None:
-                    return None, None, None, "missing_end_id"
-                return first_chat_id, first_msg_id, second_msg_id, None
-
-            end_id = parse_chat_id(args[1])
-            if end_id is None:
-                return None, None, None, "invalid_end_id"
-            return first_chat_id, first_msg_id, end_id, None
-
-        if len(args) < 3:
-            return None, None, None, "missing_range"
-        start_id = parse_chat_id(args[1])
-        end_id = parse_chat_id(args[2])
-        if start_id is None or end_id is None:
-            return None, None, None, "invalid_range_id"
-        return first_chat_id, start_id, end_id, None
-
-    if args[0].startswith(("http://t.me/", "https://t.me/")):
-        return None, None, None, "public_link_not_supported"
-
-    if len(args) < 3:
-        return None, None, None, "missing_range"
-
-    chat_id = parse_chat_id(args[0])
-    start_id = parse_chat_id(args[1])
-    end_id = parse_chat_id(args[2])
-    if chat_id is None or start_id is None or end_id is None:
-        return None, None, None, "invalid_range_id"
-    return chat_id, start_id, end_id, None
+    if start is None:
+        if len(args) != 3:
+            return invalid('missing_range' if len(args) < 3 else 'extra_args')
+        start, end = message_id(args[1]), message_id(args[2])
+    else:
+        if len(args) != 2:
+            return invalid('missing_end_id' if len(args) < 2 else 'extra_args')
+        if args[1].startswith(('http://', 'https://')):
+            end_chat, end = parse_private_channel_link(args[1])
+            if end is None:
+                return invalid('invalid_end_id')
+            if end_chat != chat_id:
+                return invalid('chat_mismatch')
+        else:
+            end = message_id(args[1])
+    if not all(mid is not None and 1 <= mid <= 2**31 - 1 for mid in (start, end)):
+        return invalid('invalid_range_id')
+    if start > end:
+        return invalid('reversed_range')
+    return chat_id, start, end, None
 
 
 def parse_monitor_chat_id(text: str) -> Optional[int]:
-    chat_id = parse_chat_id(text)
-    if chat_id is None or chat_id <= 0:
+    value = text.strip()
+    if not re.fullmatch(r'[0-9]{1,12}', value):
         return None
-    raw = str(chat_id)
-    if raw.startswith('100') and len(raw) > 10:
-        return None
-    return chat_id
+    chat_id = int(value)
+    return chat_id if 1 <= chat_id <= MAX_CHANNEL_ID else None
 
 
 def parse_chat_ids(raw: str) -> list[int]:
@@ -595,49 +582,98 @@ def parse_chat_ids(raw: str) -> list[int]:
                 logger.warning(f"忽略无效监听源频道裸ID: {item}")
             continue
         result.append(chat_id)
-    return result
+    return list(dict.fromkeys(result))
 
 
 ADMIN_IDS: list[int] = parse_admin_ids(os.getenv("ADMIN_IDS", ""))
-SUBMITTER_IDS = set(parse_admin_ids(os.getenv("SUBMITTER_IDS", "")))
+SUBMITTER_IDS = set(parse_admin_ids(os.getenv("SUBMITTER_IDS", ""), "SUBMITTER_IDS"))
 
 
 def can_submit(sender_id: Optional[int]) -> bool:
     return bool(sender_id and sender_id > 0 and (sender_id in ADMIN_IDS or sender_id in SUBMITTER_IDS))
 
 TARGET_CHAT_ID: Optional[int] = parse_chat_id(os.getenv("FORWARD_TO_CHAT_ID", ""))
+if os.getenv("FORWARD_TO_CHAT_ID", "").strip() and TARGET_CHAT_ID is None:
+    logger.warning("FORWARD_TO_CHAT_ID 不是有效频道 ID；设置有效目标前不会转发")
 MONITOR_CHAT_IDS: list[int] = parse_chat_ids(os.getenv("MONITOR_CHAT_IDS", ""))
 
 
 # ─────────────────────────── ForwardLog ────────────────────────
 class ForwardLog:
     def __init__(self, log_file: str = FORWARD_LOG_FILE):
-        self.log_file = log_file
+        self.log_file = Path(log_file)
+        self.writable = True
         self.logs: list[dict] = self._load()
+        self._last_id = max((int(r['id']) for r in self.logs if re.fullmatch(r'[0-9]{1,20}', str(r['id']))), default=0)
+
+    @staticmethod
+    def _valid_row(row) -> bool:
+        if not isinstance(row, dict):
+            return False
+        timestamp = row.get('timestamp')
+        return (type(timestamp) in (int, float) and 0 <= timestamp < float('inf')
+                and type(row.get('success')) is bool and type(row.get('to')) is int
+                and type(row.get('id')) in (int, str)
+                and isinstance(row.get('from'), str) and isinstance(row.get('date'), str)
+                and isinstance(row.get('error', '' if row['success'] else None), str))
 
     def _load(self) -> list[dict]:
-        if not os.path.exists(self.log_file):
-            return []
         try:
-            with open(self.log_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"加载转发日志失败: {e}")
+            text = self.log_file.read_text(encoding="utf-8-sig")
+            if not text.strip():
+                return []
+            rows = json.loads(text)
+            if not isinstance(rows, list) or not all(self._valid_row(row) for row in rows):
+                raise ValueError("转发历史格式不正确")
+            return rows
+        except FileNotFoundError:
             return []
+        except (UnicodeError, ValueError):
+            backup = self.log_file.with_name(f"{self.log_file.name}.corrupt-{secrets.token_hex(8)}")
+            try:
+                self.log_file.rename(backup)
+                logger.warning("转发历史已损坏，原件已保留在 %s", backup)
+            except OSError:
+                self.writable = False
+                logger.exception("无法备份损坏的转发历史；为保护原件，已停用历史写入")
+        except OSError:
+            self.writable = False
+            logger.exception("无法读取转发历史；为保护原件，已停用历史写入")
+        return []
 
-    def _save(self) -> None:
+    def _prune(self) -> None:
         if FORWARD_LOG_MAX_DAYS > 0:
-            cutoff = time.time() - (FORWARD_LOG_MAX_DAYS * 86400)
-            self.logs = [r for r in self.logs if r.get('timestamp', 0) > cutoff]
+            cutoff = time.time() - FORWARD_LOG_MAX_DAYS * 86400
+            self.logs = [row for row in self.logs if row['timestamp'] > cutoff]
 
+    def _save(self) -> bool:
+        self._prune()
+        if not self.writable:
+            return False
+        tmp = None
         try:
-            with open(self.log_file, 'w', encoding='utf-8') as f:
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.log_file.parent,
+                                             prefix=".forward-history-", delete=False) as f:
+                tmp = Path(f.name)
                 json.dump(self.logs, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"保存转发日志失败: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.log_file)
+            return True
+        except (OSError, ValueError, TypeError):
+            logger.exception("保存转发历史失败，原文件未被截断")
+            return False
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("无法清除转发历史临时文件：%s", tmp)
 
     def add(self, from_link: str, to_chat_id: int, success: bool, error_msg: str = "") -> str:
-        record_id = f"{len(self.logs) + 1}"
+        self._last_id += 1
+        record_id = str(self._last_id)
         record = {
             'id': record_id,
             'from': from_link,
@@ -652,14 +688,45 @@ class ForwardLog:
         return record_id
 
     def get_all(self) -> list[dict]:
+        self._prune()
         return self.logs
 
     def get_recent(self, count: int = 10) -> list[dict]:
-        return self.logs[-count:] if self.logs else []
+        return self.get_all()[-count:] if count > 0 else []
 
-    def clear(self) -> None:
-        self.logs = []
-        self._save()
+    def clear(self) -> bool:
+        previous, self.logs = self.logs, []
+        if self._save():
+            self._last_id = 0
+            return True
+        self.logs = previous
+        return False
+
+
+def format_recent_history(rows: list[dict], total: int) -> str:
+    def clip(value, limit: int, *, tail=False) -> str:
+        text = str(value)
+        data = text.encode('utf-16-le', errors='replace')
+        if len(data) <= 2 * limit:
+            return text
+        size = (limit - 1) * 2
+        if tail:
+            return '…' + data[-size:].decode('utf-16-le', errors='ignore')
+        return data[:size].decode('utf-16-le', errors='ignore') + '…'
+
+    if not rows:
+        return '📝 暂无转发记录'
+    # Reserve room for every row; a single long failure must not hide newer deliveries.
+    rows = rows[-10:]
+    lines = ['📝 转发记录（最新在前）：']
+    for row in reversed(rows):
+        entry = (f"{'✅' if row['success'] else '❌'} #{clip(row['id'], 24)}\n"
+                 f"FROM: {clip(row['from'], 110)}\nTO:   {clip(row['to'], 24)}\n📅 {clip(row['date'], 24)}")
+        if not row['success']:
+            entry += '\n错误: ' + clip(row['error'], 1500 // len(rows), tail=True)
+        lines.append(entry)
+    lines.append(f'共 {total} 条记录')
+    return '\n\n'.join(lines)
 
 
 class MonitorMessageMap:
@@ -718,19 +785,34 @@ class MonitorMessageMap:
         ).fetchone()
         return row[0] if row else None
 
-    def needs_copy(self, source_chat_id: int, source_message_id: int, target_chat_id: int) -> bool:
-        if self.get(source_chat_id, source_message_id, target_chat_id) is not None:
-            return False
-        # 已过期帖不能因事件重放而成为“新帖”。每对频道只保留一个序号，不保留逐帖记录。
-        return self.db.execute(
-            "SELECT 1 FROM monitor_pruned_through WHERE source_chat_id=? AND target_chat_id=? AND last_id>=?",
-            (source_chat_id, target_chat_id, source_message_id),
-        ).fetchone() is None
+    def copy_state(self, source_chat_id: int, source_message_id: int, target_chat_id: int) -> TaskStatus:
+        # A missing receipt is still unresolved even if a higher message ID has since expired.
+        row = self.db.execute("""
+            SELECT CASE
+                WHEN EXISTS (SELECT 1 FROM monitor_messages WHERE source_chat_id=:src
+                    AND source_message_id=:mid AND target_chat_id=:dst) THEN 'completed'
+                WHEN EXISTS (SELECT 1 FROM monitor_copy_intents WHERE source_chat_id=:src
+                    AND source_message_id=:mid AND target_chat_id=:dst) THEN 'unconfirmed'
+                WHEN EXISTS (SELECT 1 FROM monitor_pruned_through WHERE source_chat_id=:src
+                    AND target_chat_id=:dst AND last_id>=:mid) THEN 'completed'
+                ELSE 'pending' END
+        """, {"src": source_chat_id, "mid": source_message_id, "dst": target_chat_id}).fetchone()
+        return TaskStatus(row[0])
+
+    def batch_copy_state(self, source_id: int, target_id: int, ids: list[int]) -> TaskStatus:
+        states = {self.copy_state(source_id, mid, target_id) for mid in ids}
+        if TaskStatus.PENDING in states:
+            return TaskStatus.PENDING  # At least one new member can be sent.
+        if TaskStatus.UNCONFIRMED in states:
+            logger.warning("复制结果待核对，不重发：source=%s/%s target=%s", source_id, ids, target_id)
+            return TaskStatus.UNCONFIRMED
+        return TaskStatus.COMPLETED
 
     def cleanup_if_due(self, retention_days: int) -> int:
         """原子提交清理水位和最后成功时间，返回下次检查前的秒数。"""
         if retention_days <= 0:
             return MONITOR_CLEANUP_INTERVAL
+        started = time.monotonic()
         now = int(time.time())
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -746,7 +828,8 @@ class MonitorMessageMap:
             """, (cutoff,))
             removed = self.db.execute("DELETE FROM monitor_messages WHERE confirmed_at <= ?", (cutoff,)).rowcount
             self.db.execute("INSERT OR REPLACE INTO monitor_cleanup (id, last_run) VALUES (1, ?)", (now,))
-        logger.info("monitor-data 清理完成：移除 %s 条已确认映射，保留期 %s 天", removed, retention_days)
+        logger.info("monitor-data 清理完成：移除 %s 条已确认映射，保留期 %s 天，耗时 %.3f 秒",
+                    removed, retention_days, time.monotonic() - started)
         return MONITOR_CLEANUP_INTERVAL
 
     def reserve(self, source_chat_id: int, target_chat_id: int, ids: list[int]) -> dict[int, int]:
@@ -756,7 +839,7 @@ class MonitorMessageMap:
             self.db.execute("BEGIN IMMEDIATE")
             for mid in ids:
                 key = (source_chat_id, mid, target_chat_id)
-                if not self.needs_copy(*key):
+                if self.copy_state(*key) != TaskStatus.PENDING:
                     continue
                 nonce = secrets.randbits(63) or 1
                 cursor = self.db.execute(
@@ -803,11 +886,8 @@ class TDLDownloader:
 
     @staticmethod
     def normalize_chat_id(to_chat_id: int) -> str:
-        """剥掉 -100 前缀，tdl 接受裸 ID"""
-        raw = str(to_chat_id).lstrip('-')
-        if raw.startswith('100') and len(raw) > 10:
-            raw = raw[3:]
-        return raw
+        """Keep bare IDs intact; remove Telegram's numeric peer mark only for marked IDs."""
+        return str(utils.resolve_id(to_chat_id)[0])
 
     @staticmethod
     def parse_message_link(link: str) -> tuple[Optional[int], Optional[int]]:
@@ -851,75 +931,89 @@ class TDLDownloader:
     ) -> tuple[int, str, str]:
         """执行命令并实时回调 stdout/stderr 输出。"""
         logger.info(f"执行 TDL 命令: {' '.join(cmd)}")
-        stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
+        # One bounded diagnostic tail per pipe. TDL progress may use CR or no newline at all.
+        stdout_lines, stderr_lines = deque(maxlen=16), deque(maxlen=16)
 
-        async def read_stream(stream, collector: list[str], prefix: str = "") -> None:
+        async def read_stream(stream, collector, prefix: str) -> None:
+            tail = b""
             while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                text = line.decode('utf-8', errors='ignore').strip()
-                if not text:
-                    continue
-                collector.append(text)
-                logger.info(f"TDL {prefix}: {text}")
-                if progress_callback:
-                    await progress_callback(text)
+                chunk = await stream.read(8192)
+                # Split bytes, then decode complete records so chunk boundaries don't break UTF-8.
+                parts = (tail + chunk).replace(b"\r", b"\n").split(b"\n")
+                tail = parts.pop()[-2048:] if chunk else b""
+                for line in parts:
+                    text = line[-2048:].decode("utf-8", errors="replace").strip()
+                    if text:
+                        collector.append(text)
+                        logger.debug("TDL %s: %s", prefix, text)
+                        if progress_callback:
+                            await progress_callback(text)
+                if not chunk:
+                    return
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        self.active_processes.add(process)
-
+        # Shield creation: cancellation may arrive after the OS has spawned the child but before
+        # asyncio hands us its Process. In that case still take ownership and reap it.
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        ))
+        readers = []
         try:
-            await asyncio.gather(
-                read_stream(process.stdout, stdout_lines, "stdout"),
-                read_stream(process.stderr, stderr_lines, "stderr"),
-            )
-            return_code = await process.wait()
-            return return_code, "\n".join(stdout_lines).strip(), "\n".join(stderr_lines).strip()
+            process = await asyncio.shield(spawn)
+        except asyncio.CancelledError:
+            try:
+                process = await spawn
+            except Exception as exc:
+                # No child to reap. Do not turn cancellation into a normal TDL failure:
+                # /tdlstop is waiting for this worker to exit, not to fetch another task.
+                logger.debug("已取消的进程未启动：%s", type(exc).__name__)
+            else:
+                self.active_processes.add(process)
+                await self._reap(process, readers)
+            raise
+        self.active_processes.add(process)
+        try:
+            readers = [asyncio.create_task(read_stream(process.stdout, stdout_lines, "stdout")),
+                       asyncio.create_task(read_stream(process.stderr, stderr_lines, "stderr"))]
+            await asyncio.gather(*readers)
+            code = await process.wait()
+            return code, "\n".join(stdout_lines).strip(), "\n".join(stderr_lines).strip()
         finally:
-            self.active_processes.discard(process)
-
-    async def stop_active_processes(self) -> int:
-        processes = list(self.active_processes)
-        if not processes:
-            return 0
-
-        stopped = 0
-        for process in processes:
-            if process.returncode is not None:
-                self.active_processes.discard(process)
-                continue
+            cleanup = asyncio.create_task(self._reap(process, readers))
             try:
-                process.terminate()
-                stopped += 1
-            except ProcessLookupError:
-                self.active_processes.discard(process)
-            except Exception as e:
-                logger.error(f"停止 TDL 进程失败: {e}")
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+                raise
 
-        deadline = time.time() + 5
-        for process in processes:
-            if process.returncode is not None:
-                self.active_processes.discard(process)
-                continue
-            try:
-                wait_time = max(0.1, deadline - time.time())
-                await asyncio.wait_for(process.wait(), timeout=wait_time)
-            except asyncio.TimeoutError:
+    async def _reap(self, process, readers) -> None:
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+
+        async def drain(stream):
+            while await stream.read(65536):
+                pass
+
+        # Keep draining even after cancellation, so a full OS pipe cannot deadlock wait().
+        drains = asyncio.gather(drain(process.stdout), drain(process.stderr), return_exceptions=True)
+        try:
+            if process.returncode is None:
                 try:
-                    process.kill()
+                    process.terminate()
                 except ProcessLookupError:
                     pass
-                except Exception as e:
-                    logger.error(f"强制停止 TDL 进程失败: {e}")
-            finally:
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+            await process.wait()
+        finally:
+            await drains
+            if process.returncode is not None:
                 self.active_processes.discard(process)
-        return stopped
 
     async def export_range(
         self,
@@ -998,15 +1092,23 @@ class TDLDownloader:
 # ─────────────────────────── TelegramBot ───────────────────────
 class TelegramBot:
     def __init__(self):
-        self.client = TelegramClient(MemorySession(), API_ID, API_HASH)
+        self.client = TelegramClient(MemorySession(), API_ID, API_HASH, flood_sleep_threshold=0)
         self.user_client: Optional[TelegramClient] = None
         self.user_monitor_running = False
+        self._user_monitor_watch: Optional[asyncio.Task] = None
         self.tdl = TDLDownloader()
         self.target_chat_id: Optional[int] = TARGET_CHAT_ID
-        self.monitor_chat_ids: list[int] = MONITOR_CHAT_IDS
+        self.monitor_chat_ids: list[int] = MONITOR_CHAT_IDS.copy()
         self.forward_log = ForwardLog()
-        self._album_processed: set[int] = set()
+        self._pending_albums: set[tuple[int, int]] = set()
+        self._album_processed: dict[tuple[int, int], None] = {}
         self._forward_status_ids: dict[tuple[int, int], None] = {}
+        self._stopping = False
+        self._delete_tasks: set[asyncio.Task] = set()
+        self.restart_requested = False
+        self._bot_handlers_registered = False
+        self._bot_username: Optional[str] = None
+        self._monitor_db_lock = asyncio.Lock()
         self._monitor_message_map: Optional[MonitorMessageMap] = None
         self._monitor_cleanup_task: Optional[asyncio.Task] = None
         self.task_queue = TaskQueue(self)
@@ -1019,102 +1121,40 @@ class TelegramBot:
         match = TELEGRAM_LINK_PATTERN.search(text)
         if not match:
             return None
+        # Never strip a routing query and silently submit the parent post instead.
+        query = re.match(r"/?\?([^\s#]*)", text[match.end():])
+        if query and targets_submessage(query[1]):
+            return None
         link = match.group(0)
         return None if any(kw in link.lower() for kw in EXCLUDE_KEYWORDS) else link
 
-    def build_message_link(self, chat, msg_id: int) -> str:
-        username = getattr(chat, 'username', None)
-        if username:
-            return f"https://t.me/{username}/{msg_id}"
-        chat_id = str(getattr(chat, 'id', '')).lstrip('-')
-        if chat_id.startswith('100') and len(chat_id) > 10:
-            chat_id = chat_id[3:]
-        return f"https://t.me/c/{chat_id}/{msg_id}"
-
     async def resolve_link(self, event) -> Optional[str]:
-        # 1. 转发来源自带链接
-        if event.message.forward:
-            fwd = event.message.forward
-
-            if getattr(fwd, 'link', None):
-                return fwd.link
-
-            if hasattr(fwd, 'from_id') and fwd.from_id:
-                try:
-                    from_id = fwd.from_id
-                    chat = await event.client.get_entity(from_id)
-
-                    if hasattr(fwd, 'channel_post') and fwd.channel_post:
-                        msg_id = fwd.channel_post
-                    elif hasattr(fwd, 'message') and fwd.message:
-                        msg_id = fwd.message
-                    else:
-                        msg_id = event.message.id
-
-                    return self.build_message_link(chat, msg_id)
-                except Exception as e:
-                    logger.error(f"从转发构建链接失败: {e}")
-
-        # 2. 消息文本中直接含链接
-        link = self.extract_link(event.message.text or "")
-        if link:
-            return link
-
-        # 3. 消息本身的链接属性
-        if getattr(event.message, 'link', None):
-            return event.message.link
-
-        # 4. 根据 chat 信息构建
-        chat = await event.get_chat()
-        return self.build_message_link(chat, event.message.id)
-
-    # ── Album handling ──────────────────────────────────────────
-
-    def is_album(self, event) -> bool:
-        return getattr(event.message, 'grouped_id', None) is not None
-
-    def add_single_param(self, link: str) -> str:
-        if "?single" not in link:
-            link = link + "?single"
-        return link
+        message = event.message
+        fwd = message.forward
+        if fwd:
+            peer, mid = getattr(fwd, 'from_id', None), getattr(fwd, 'channel_post', None)
+            if isinstance(peer, types.PeerChannel) and peer.channel_id > 0 and isinstance(mid, int) and mid > 0:
+                # PeerChannel already contains the bare source ID. Do not use the receiving chat's ID.
+                # The cached username is optional; resolving it over the network is unnecessary.
+                username = getattr(getattr(fwd, 'chat', None), 'username', None)
+                return f"https://t.me/{username}/{mid}" if username else f"https://t.me/c/{peer.channel_id}/{mid}"
+        return self.extract_link(message.text or "")
 
     @staticmethod
     def normalize_source_chat_id(chat_id: int) -> int:
         return utils.resolve_id(chat_id)[0]
 
-    async def get_event_chat_ids(self, event) -> list[int]:
-        ids: list[int] = []
-
-        def add_id(value) -> None:
-            if value is None:
-                return
-            try:
-                chat_id = int(value)
-            except (TypeError, ValueError):
-                return
-            if chat_id not in ids:
-                ids.append(chat_id)
-
-        add_id(getattr(event, 'chat_id', None))
-
-        peer_id = getattr(event.message, 'peer_id', None)
-        channel_id = getattr(peer_id, 'channel_id', None)
-        if channel_id is not None:
-            add_id(channel_id)
-            add_id(f"-100{channel_id}")
-
-        chat_id = getattr(peer_id, 'chat_id', None)
-        if chat_id is not None:
-            add_id(chat_id)
-            add_id(-chat_id)
-
-        try:
-            chat = await event.get_chat()
-            add_id(getattr(chat, 'id', None))
-        except Exception as e:
-            logger.debug(f"获取事件 Chat 信息失败: {e}")
-
-        return ids
+    @staticmethod
+    def format_chat_id(event) -> str:
+        peer = event.message.peer_id
+        chat_id = event.chat_id
+        if chat_id is None:
+            return "无法获取当前聊天 ID"
+        text = f"🆔 当前聊天/频道 ID：{chat_id}"
+        # Only broadcast posts can be monitored. Telethon also uses PeerChannel for megagroups.
+        if isinstance(peer, types.PeerChannel) and event.message.post:
+            text += f"\n频道裸 ID：{peer.channel_id}\n\n可用以下命令添加监听：\n/monitor add {peer.channel_id}"
+        return text
 
     def is_monitor_post(self, message) -> bool:
         return (
@@ -1155,10 +1195,10 @@ class TelegramBot:
         lines = ["📡 当前自动监听源频道：\n"]
         for chat_id in self.monitor_chat_ids:
             lines.append(f"- {chat_id}\n")
-        if self.user_monitor_running:
+        if self.is_user_monitor_active():
             lines.append("\n监听客户端：用户账号 Telethon client\n")
         elif self.user_client:
-            lines.append("\n监听客户端：用户账号未启动或未授权\n")
+            lines.append("\n监听客户端：Bot 回退监听（用户账号当前不可用）\n")
         else:
             lines.append("\n监听客户端：bot 推送监听\n")
         return "".join(lines)
@@ -1180,9 +1220,11 @@ class TelegramBot:
             logger.debug(f"自动删除消息失败: {e}")
 
     def schedule_delete(self, message, delay: int) -> None:
-        if not AUTO_DELETE_BOT_MESSAGES or not message or delay <= 0:
+        if self._stopping or not AUTO_DELETE_BOT_MESSAGES or not message or delay <= 0:
             return
-        asyncio.create_task(self._delete_message_later(message, delay))
+        job = asyncio.create_task(self._delete_message_later(message, delay))
+        self._delete_tasks.add(job)
+        job.add_done_callback(self._delete_tasks.discard)
 
     def schedule_status_delete(self, message, failed: bool = False) -> None:
         delay = AUTO_DELETE_ERROR_SECONDS if failed else AUTO_DELETE_STATUS_SECONDS
@@ -1197,7 +1239,7 @@ class TelegramBot:
             self._forward_status_ids.pop(next(iter(self._forward_status_ids)))
 
     def is_user_monitor_active(self) -> bool:
-        return self.user_client is not None and self.user_monitor_running
+        return self.user_monitor_running and self.user_client is not None and self.user_client.is_connected()
 
     def monitor_target_channel_id(self) -> Optional[int]:
         if not self.target_chat_id:
@@ -1224,27 +1266,35 @@ class TelegramBot:
         )
 
     def register_monitor_events(self, client: TelegramClient, *, fallback: bool = False) -> None:
+        def selected():
+            return not self.is_user_monitor_active() if fallback else self.is_user_monitor_active()
+
         @client.on(events.Album)
         async def monitor_album(event):
-            if not fallback or not self.is_user_monitor_active():
+            if selected():
                 await self.enqueue_monitor_post(event, event.messages)
 
         @client.on(events.MessageEdited)
         async def monitor_edit(event):
-            if not fallback or not self.is_user_monitor_active():
+            if selected():
                 await self.enqueue_monitor_post(event, [event.message], edited=True)
 
-    async def get_monitor_target_peer(self, client: TelegramClient, target_id: int):
+    async def get_monitor_channel_peer(self, client: TelegramClient, channel_id: int):
         try:
-            return await client.get_input_entity(types.PeerChannel(target_id))
+            return await client.get_input_entity(types.PeerChannel(channel_id))
         except (ValueError, errors.ChannelPrivateError):
-            # 用户 session 初次运行时可能尚未缓存目标频道的 access hash。
+            # 用户 session 初次运行时可能尚未缓存频道的 access hash。
             if client is not self.client:
                 async for dialog in client.iter_dialogs():
                     peer = dialog.input_entity
-                    if isinstance(peer, types.InputPeerChannel) and peer.channel_id == target_id:
+                    if isinstance(peer, types.InputPeerChannel) and peer.channel_id == channel_id:
                         return peer
             raise
+
+    async def monitor_source_peer(self, client, event, source_id):
+        if client is event.client:
+            return await event.get_input_chat()
+        return await self.get_monitor_channel_peer(client, source_id)
 
     async def report_monitor_copy(self, text: str, *, failed: bool = False) -> None:
         if ADMIN_IDS:
@@ -1275,50 +1325,91 @@ class TelegramBot:
         except errors.MessageNotModifiedError:
             pass
 
+    async def release_rejected_request(self, task, request) -> None:
+        async with self._monitor_db_lock:
+            self.monitor_message_map().release_rejected(task.source_chat_id, task.target_chat_id,
+                                                        dict(zip(request.id, request.random_id)))
+
+    def defer_flooded_copy(self, task, exc, rejected: Optional[RejectedCopy] = None) -> bool:
+        if task.retries >= 2:
+            return False
+        task.rejected_copy = rejected
+        delay = max(1, exc.seconds)
+        self.task_queue.retry_later(task, delay)
+        logger.warning("频道复制限流，%s 秒后重试（%s/2）：%s", delay, task.retries, task.link)
+        return True
+
     async def process_monitor_task(self, task: ForwardTask) -> None:
         source_id, target_id = task.source_chat_id, task.target_chat_id
         message_ids = task.message_ids
+        event = task.event
         try:
-            mappings = self.monitor_message_map()
-            client = task.event.client
+            # Select the current listener at execution time, not when the update was enqueued.
+            client = self.user_client if self.is_user_monitor_active() else self.client
 
             if task.mode == "monitor_edit":
                 source_msg_id = message_ids[0]
-                target_msg_id = mappings.get(source_id, source_msg_id, target_id)
+                async with self._monitor_db_lock:
+                    target_msg_id = self.monitor_message_map().get(source_id, source_msg_id, target_id)
                 if target_msg_id is None:
                     logger.info("跳过频道编辑（没有转发映射）：%s, target=%s", task.link, target_id)
                     task.status = TaskStatus.COMPLETED
                     return
                 # 出队后取源帖最新版本，避免较旧的编辑事件覆盖新的正文或媒体。
-                source_peer = await task.event.get_input_chat()
+                source_peer = await self.monitor_source_peer(client, event, source_id)
                 current = await client.get_messages(source_peer, ids=source_msg_id)
                 if current is None:
                     logger.info("跳过频道编辑（源帖已不可读取）：%s", task.link)
                     task.status = TaskStatus.COMPLETED
                     return
-                target_peer = await self.get_monitor_target_peer(client, target_id)
+                target_peer = await self.get_monitor_channel_peer(client, target_id)
                 await self.edit_monitor_message(client, target_peer, target_msg_id, current)
                 logger.info("已同步频道编辑：%s -> %s/%s", task.link, target_id, target_msg_id)
             else:
-                pending = [mid for mid in message_ids if mappings.needs_copy(source_id, mid, target_id)]
-                if not pending:
-                    task.status = TaskStatus.COMPLETED
-                    return
-                source_peer = await task.event.get_input_chat()
-                target_peer = await self.get_monitor_target_peer(client, target_id)
-                reserved = mappings.reserve(source_id, target_id, pending)
-                if not reserved:
-                    task.status = (TaskStatus.UNCONFIRMED if any(mappings.needs_copy(source_id, mid, target_id)
-                                                               for mid in pending) else TaskStatus.COMPLETED)
-                    return
-                try:
-                    sent = await client(functions.messages.ForwardMessagesRequest(
+                rejected = task.rejected_copy
+                if rejected is None:
+                    async with self._monitor_db_lock:
+                        mappings = self.monitor_message_map()
+                        state = mappings.batch_copy_state(source_id, target_id, message_ids)
+                        if state != TaskStatus.PENDING:
+                            task.status = state
+                            return
+                    try:
+                        source_peer = await self.monitor_source_peer(client, event, source_id)
+                        target_peer = await self.get_monitor_channel_peer(client, target_id)
+                    except errors.FloodWaitError as exc:
+                        if self.defer_flooded_copy(task, exc):
+                            return
+                        raise
+                    async with self._monitor_db_lock:
+                        mappings = self.monitor_message_map()
+                        reserved = mappings.reserve(source_id, target_id, message_ids)
+                        if not reserved:
+                            task.status = mappings.batch_copy_state(source_id, target_id, message_ids)
+                            return
+                    request = functions.messages.ForwardMessagesRequest(
                         from_peer=source_peer, id=list(reserved), random_id=list(reserved.values()),
                         to_peer=target_peer, drop_author=True,
-                    ))
+                    )
+                else:
+                    client, request = rejected.client, rejected.request
+                    if not client.is_connected():
+                        # Prior call was explicitly rejected and no retry has gone out.
+                        await self.release_rejected_request(task, request)
+                        task.rejected_copy = None
+                        raise ConnectionError("限流重试取消：原发送账号已断开，未换号重发")
+                reserved = dict(zip(request.id, request.random_id))
+                task.rejected_copy = None  # From this point cancellation does NOT release any intent.
+                try:
+                    sent = await client(request)
+                except errors.FloodWaitError as exc:
+                    if self.defer_flooded_copy(task, exc, RejectedCopy(client, request)):
+                        return
+                    await self.release_rejected_request(task, request)
+                    raise
                 except (errors.ChatWriteForbiddenError, errors.ChatForwardsRestrictedError,
                         errors.ChatAdminRequiredError, errors.ChannelPrivateError):
-                    mappings.release_rejected(source_id, target_id, reserved)
+                    await self.release_rejected_request(task, request)
                     raise
                 except Exception as exc:
                     raise CopyOutcomeUnknown(f"发送未获确认（{type(exc).__name__}），请核对源消息 {list(reserved)}") from exc
@@ -1327,10 +1418,13 @@ class TelegramBot:
                                 if isinstance(update, types.UpdateMessageID)}
                 pairs = {mid: by_random_id[rid] for mid, rid in reserved.items() if rid in by_random_id}
                 try:
-                    mappings.remember(source_id, target_id, pairs)
+                    async with self._monitor_db_lock:
+                        mappings = self.monitor_message_map()
+                        mappings.remember(source_id, target_id, pairs)
+                        unknown = [mid for mid in message_ids
+                                   if mappings.copy_state(source_id, mid, target_id) != TaskStatus.COMPLETED]
                 except sqlite3.Error as exc:
                     raise CopyOutcomeUnknown("目标 ID 未能持久化，请核对后处理") from exc
-                unknown = [mid for mid in pending if mappings.get(source_id, mid, target_id) is None]
                 if unknown:
                     raise CopyOutcomeUnknown(f"回执不完整；以下源消息待核对，不重发：{unknown}")
                 self.forward_log.add(task.link, target_id, True)
@@ -1344,18 +1438,18 @@ class TelegramBot:
             self.forward_log.add(task.link, target_id, False, str(exc))
             await self.report_monitor_copy(f"⚠️ 自动复制结果待核对：{task.link} → {target_id}\n{exc}", failed=True)
         except Exception as exc:
-            # 只重试编辑；重新出队会重读映射、最新正文和媒体引用，不执行任何复制请求。
-            if task.mode == "monitor_edit" and task.edit_retries < 2:
+            # 编辑重试重新读取映射、最新正文和媒体引用，不执行复制请求。
+            if task.mode == "monitor_edit" and task.retries < 2:
                 delay = None
                 if isinstance(exc, errors.FloodWaitError):
                     delay = max(1, exc.seconds)
                 elif isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError,
                                       errors.ServerError, errors.TimedOutError,
                                       errors.FileReferenceExpiredError, errors.FileReferenceInvalidError)):
-                    delay = 2 ** (task.edit_retries + 1)
+                    delay = 2 ** (task.retries + 1)
                 if delay is not None:
-                    self.task_queue.retry_edit_later(task, delay)
-                    logger.warning("频道编辑 %s 秒后重试（%s/2）：%s", delay, task.edit_retries, task.link)
+                    self.task_queue.retry_later(task, delay)
+                    logger.warning("频道编辑 %s 秒后重试（%s/2）：%s", delay, task.retries, task.link)
                     return
             task.error_msg = str(exc)
             task.status = TaskStatus.FAILED
@@ -1375,7 +1469,7 @@ class TelegramBot:
             else:
                 logger.info("用户账号监听未启用：未配置用户 session")
                 return
-            self.user_client = TelegramClient(session, API_ID, API_HASH)
+            self.user_client = TelegramClient(session, API_ID, API_HASH, flood_sleep_threshold=0)
         except Exception as exc:
             # 异常文本可能包含输入内容或路径，只记录类型。
             logger.warning("用户 session 初始化失败（%s），回退到 Bot 监听", type(exc).__name__)
@@ -1385,83 +1479,110 @@ class TelegramBot:
         @self.user_client.on(events.NewMessage)
         async def user_monitor_handler(event):
             try:
-                if event.message.grouped_id is None:
+                if self.is_user_monitor_active() and event.message.grouped_id is None:
                     await self.enqueue_monitor_post(event, [event.message])
             except Exception as e:
                 logger.error(f"用户账号监听消息处理异常: {e}", exc_info=True)
 
         self.register_monitor_events(self.user_client)
 
-        try:
-            await self.user_client.connect()
-            if not await self.user_client.is_user_authorized():
-                logger.error(
-                    "用户账号监听未启动：session 未授权。请先生成 USER_SESSION_STRING，"
-                    "或配置已登录的 USER_SESSION_FILE。"
-                )
-                await self.notify_admins(
-                    "⚠️ 用户账号监听未启动：session 未授权。\n"
-                    "请先生成 USER_SESSION_STRING，或配置已登录的 USER_SESSION_FILE。"
-                )
-                await self.user_client.disconnect()
-                return
+        retry_after = await self._connect_user_monitor(self.user_client, initial=True)
+        if self.user_monitor_running or retry_after is not None:
+            self._user_monitor_watch = asyncio.create_task(self._watch_user_monitor(self.user_client, retry_after))
 
-            me = await self.user_client.get_me()
-            self.user_monitor_running = True
-            logger.info(f"用户账号监听已启动: id={me.id}, username={getattr(me, 'username', None)}")
-        except Exception as e:
-            logger.error("用户账号监听启动失败（%s），回退到 Bot 监听", type(e).__name__)
-            await self.notify_admins("⚠️ 用户账号监听启动失败，已回退到 Bot 监听。")
-            try:
-                await self.user_client.disconnect()
-            except Exception:
-                pass
+    async def _connect_user_monitor(self, client, *, initial: bool) -> Optional[int]:
+        """Verify identity before selecting this listener; return a delay only for retryable failures."""
+        retry_after = None
+        try:
+            await client.connect()
+            me = await client.get_me()
+            if me is not None:
+                self.user_monitor_running = True
+                logger.info("用户账号监听已启动: id=%s", me.id)
+                if not initial:
+                    await self.notify_admins("✅ 用户账号监听已恢复，已从 Bot 切回。")
+                return None
+            await self.notify_admins("⚠️ 用户 session 未授权或已失效，请更换并重启；继续使用 Bot 监听。")
+        except (ConnectionError, TimeoutError, asyncio.TimeoutError, socket.gaierror, errors.ServerError,
+                errors.TimedOutError, errors.FloodWaitError) as exc:
+            logger.warning("用户监听连接暂时失败（%s），将重试", type(exc).__name__)
+            retry_after = max(USER_MONITOR_RETRY_SECONDS, getattr(exc, 'seconds', 0))
+            if initial:
+                await self.notify_admins("⚠️ 用户账号监听暂时无法连接，已回退到 Bot 监听，将自动重试。")
+        except Exception as exc:
+            logger.error("用户账号监听连接失败（%s），继续使用 Bot 监听", type(exc).__name__)
+            await self.notify_admins("⚠️ 用户账号监听失败，请检查 session 并重启；继续使用 Bot 监听。")
+        await self._disconnect_user_monitor(client)
+        return retry_after
+
+    async def _disconnect_user_monitor(self, client) -> None:
+        try:
+            await client.disconnect()
+        except Exception as exc:
+            logger.warning("断开用户监听客户端时出错：%s", type(exc).__name__)
+
+    async def _watch_user_monitor(self, client, retry_after: Optional[int] = None) -> None:
+        delay = USER_MONITOR_RETRY_SECONDS
+        while True:
+            if self.user_monitor_running:
+                try:
+                    await client.disconnected
+                except Exception as exc:
+                    logger.warning("用户监听连接终止：%s", type(exc).__name__)
+                self.user_monitor_running = False
+                await self.notify_admins("⚠️ 用户账号监听已断开，已回退到 Bot 监听。")
+                await self._disconnect_user_monitor(client)
+                delay = USER_MONITOR_RETRY_SECONDS
+            elif retry_after is None:
+                return  # Invalid session or configuration; do not keep trying credentials.
+            await asyncio.sleep(max(delay, retry_after or 0))
+            retry_after = await self._connect_user_monitor(client, initial=False)
+            delay = min(delay * 2, 300)
 
     # ── Core forward logic ──────────────────────────────────────
 
-    async def do_forward(self, event, status_msg) -> None:
-        status_chat_id = getattr(status_msg, 'chat_id', event.chat_id)
-        self.remember_forward_status(status_chat_id, status_msg.id)
+    async def do_forward(self, event) -> None:
         target_id = self.target_chat_id
-        if target_id is None:
-            await status_msg.edit("❌ 未配置目标频道ID，请管理员使用 /forwardto 设置")
-            self.schedule_status_delete(status_msg, failed=True)
-            return
-
-        is_album = self.is_album(event)
-        if is_album:
-            gid = getattr(event.message, 'grouped_id', None)
-            if gid and gid in self._album_processed:
-                logger.info(f"跳过 Album 后续消息: grouped_id={gid}")
-                return
-            if gid:
-                self._album_processed.add(gid)
-                if len(self._album_processed) > 500:
-                    self._album_processed.clear()
-
-        link = await self.resolve_link(event)
-
-        if not link:
-            await status_msg.edit("❌ 无法识别消息链接，请转发消息或发送 https://t.me/... 链接")
-            self.schedule_status_delete(status_msg, failed=True)
-            return
-
-        if any(kw in link.lower() for kw in EXCLUDE_KEYWORDS):
-            await status_msg.edit(f"❌ 链接包含排除关键词，已跳过: {link}")
-            self.schedule_status_delete(status_msg, failed=True)
-            return
-
-        if is_album:
-            link = self.add_single_param(link)
-            logger.info(f"Album 消息添加 ?single 参数: {link}")
-
         gid = getattr(event.message, 'grouped_id', None)
-        status_client = getattr(status_msg, 'client', None) or self.client
-        position = await self.task_queue.add_task(
-            event, link, status_msg.id, status_chat_id, gid,
-            status_client=status_client, target_chat_id=target_id,
-        )
-        await status_msg.edit(
+        key = (event.chat_id, gid) if gid is not None else None
+        link = await self.resolve_link(event)
+        if key is not None and (key in self._pending_albums or key in self._album_processed):
+            return  # Don't create a second status while the first submitter awaits Telegram.
+
+        if target_id is None:
+            problem = "❌ 未配置目标频道ID，请管理员使用 /forwardto 设置"
+        elif not link:
+            problem = "❌ 无法确认原帖，请直接发送原帖的 https://t.me/... 消息链接"
+        elif any(kw in link.lower() for kw in EXCLUDE_KEYWORDS):
+            problem = f"❌ 链接包含排除关键词，已跳过: {link}"
+        else:
+            problem = None
+        if problem:
+            self.schedule_status_delete(await send_status(event, problem), failed=True)
+            return  # A later album member may carry usable source metadata.
+
+        if key is not None:
+            self._pending_albums.add(key)
+        try:
+            status_msg = await send_status(event, "⏳ 正在加入转发队列...")
+            status_chat_id = getattr(status_msg, 'chat_id', event.chat_id)
+            if status_msg is not None:
+                self.remember_forward_status(status_chat_id, status_msg.id)
+            position = await self.task_queue.add_task(
+                event, link, getattr(status_msg, 'id', None), status_chat_id, gid,
+                status_client=getattr(status_msg, 'client', None) or self.client, target_chat_id=target_id,
+            )
+            if position is None:
+                await edit_status(status_msg, "⏹️ 服务正在停止，任务未入队")
+                return
+            if key is not None:
+                self._album_processed[key] = None
+                if len(self._album_processed) > MANUAL_ALBUM_CACHE_SIZE:
+                    self._album_processed.pop(next(iter(self._album_processed)))
+        finally:
+            if key is not None:
+                self._pending_albums.discard(key)
+        await edit_status(status_msg,
             f"⏳ 已加入转发队列（手动提交）\n"
             f"队列位置: {position}\n"
             f"FROM: {link}\n"
@@ -1470,53 +1591,61 @@ class TelegramBot:
 
     # ── Admin commands ──────────────────────────────────────────
 
-    async def handle_admin_command(self, event) -> bool:
+    async def command_is_for_me(self, username: Optional[str]) -> bool:
+        if not username:
+            return True
+        if self._bot_username is None:
+            me = await self.client.get_me()
+            self._bot_username = (getattr(me, 'username', None) or '').lower() or None
+        return username.lower() == self._bot_username
+
+    async def handle_admin_command(self, event, *, command: Optional[str] = None) -> bool:
         if event.sender_id not in ADMIN_IDS:
             return False
 
         raw = event.message.text or ""
         parts = raw.split()
-        command = parts[0].lower()
+        if not parts:
+            return False
+        command = command or parts[0].lower()
 
         if command == '/help':
             await event.respond(START_MESSAGE_ADMIN)
             return True
 
-        original_respond = event.respond
-
-        async def auto_delete_respond(*args, **kwargs):
-            auto_delete = kwargs.pop("_auto_delete", True)
-            message = await original_respond(*args, **kwargs)
-            if auto_delete:
-                self.schedule_command_delete(message)
+        async def respond(text, **kwargs):
+            message = await event.respond(text, **kwargs)
+            self.schedule_command_delete(message)
             return message
 
-        event.respond = auto_delete_respond
+        if command in ('/restart', '/tdlstop') and len(parts) != 1:
+            await respond(f"❌ {command} 不接受其他参数，未执行")
+            return True
 
         if command == '/restart':
-            await event.respond("🔄 正在重启机器人...")
+            await respond("🔄 正在重启机器人...")
             await self._restart()
             return True
 
         if command == '/forwardto':
-            if len(parts) < 2:
-                await event.respond(
-                    "❌ 缺少目标频道 ID\n\n"
+            if len(parts) != 2:
+                await respond(
+                    "❌ 请指定且只指定一个目标频道 ID\n\n"
                     "用法：/forwardto <频道ID>\n"
                     "示例：/forwardto 1234567890\n\n"
-                    "说明：频道 ID 使用 tdl 可识别的裸 ID，不需要加 -100 前缀；机器人和 tdl 账号需要具备发帖权限。"
+                    "说明：可使用频道裸 ID 或 Telegram 标记后的频道 ID；机器人和 tdl 账号需要具备发帖权限。"
                 )
                 return True
             new_id = parse_chat_id(parts[1])
-            if new_id is None:
-                await event.respond(
+            if not new_id:
+                await respond(
                     "❌ 频道 ID 格式无效\n\n"
-                    "请只输入数字，不需要加 -100 前缀，例如：\n"
+                    "请输入频道裸 ID 或 Telegram 标记后的频道 ID，例如：\n"
                     "/forwardto 1234567890"
                 )
                 return True
             self.target_chat_id = new_id
-            await event.respond(
+            await respond(
                 f"✅ 目标频道已更新\n"
                 f"当前目标频道 ID：{self.target_chat_id}\n\n"
                 "之后收到的有效消息会转发到该频道。"
@@ -1525,61 +1654,44 @@ class TelegramBot:
 
         if command == '/showto':
             if self.target_chat_id is None:
-                await event.respond(
+                await respond(
                     "ℹ️ 尚未设置目标频道\n\n"
                     "请使用以下命令设置：\n"
                     "/forwardto 1234567890"
                 )
             else:
-                await event.respond(
+                await respond(
                     f"🎯 当前目标频道 ID：{self.target_chat_id}\n\n"
                     "所有新加入队列的任务都会转发到该频道。"
                 )
             return True
 
-        if command == '/chatid':
-            event_chat_ids = await self.get_event_chat_ids(event)
-            lines = ["🆔 当前聊天/频道 ID：\n"]
-            if event_chat_ids:
-                for chat_id in event_chat_ids:
-                    lines.append(f"- {chat_id}，裸 ID: {self.normalize_source_chat_id(chat_id)}\n")
-            else:
-                lines.append("无法获取 chat_id\n")
-            lines.append("\n可用以下命令添加监听：\n")
-            if event_chat_ids:
-                lines.append(f"/monitor add {self.normalize_source_chat_id(event_chat_ids[0])}")
-            else:
-                lines.append("/monitor add <频道ID>")
-            await event.respond("".join(lines))
-            return True
-
         if command == '/tdlstop':
-            stopped = await self.tdl.stop_active_processes()
-            cleared = await self.task_queue.clear_pending_tasks()
-            current_stopped = await self.task_queue.mark_current_task_stopped()
-            await event.respond(
-                f"⏹️ 已执行全局停止\n"
-                f"停止中的 TDL 进程数：{stopped}\n"
-                f"当前任务标记停止：{'是' if current_stopped else '否'}\n"
+            current_stopped, cleared = await self.task_queue.stop_tdl_tasks()
+            await respond(
+                f"⏹️ 已执行全局停止\n当前 TDL 任务已停止：{'是' if current_stopped else '否'}\n"
                 f"清空等待任务数：{cleared}"
             )
             return True
 
         if command == '/monitor':
             if len(parts) == 1:
-                await event.respond(self.format_monitor_chat_ids())
+                await respond(self.format_monitor_chat_ids())
                 return True
 
             action = parts[1].lower()
             if action == 'clear':
+                if len(parts) != 2:
+                    await respond("❌ /monitor clear 不接受其他参数，监听列表未更改")
+                    return True
                 self.monitor_chat_ids = []
-                await event.respond("✅ 已清空自动监听源频道列表")
+                await respond("✅ 已清空自动监听源频道列表")
                 return True
 
             if action in ('add', 'del', 'delete', 'remove'):
-                if len(parts) < 3:
-                    await event.respond(
-                        "❌ 缺少频道 ID\n\n"
+                if len(parts) != 3:
+                    await respond(
+                        "❌ 请指定且只指定一个频道 ID\n\n"
                         "用法：\n"
                         "/monitor add <源频道裸ID>\n"
                         "/monitor del <源频道裸ID>"
@@ -1587,46 +1699,42 @@ class TelegramBot:
                     return True
                 chat_id = parse_monitor_chat_id(parts[2])
                 if chat_id is None:
-                    await event.respond("❌ 监听源频道 ID 格式无效，请输入裸 ID，不要加 -100 前缀，例如：/monitor add 1234567890")
+                    await respond("❌ 监听源频道 ID 格式无效，请输入裸 ID，不要加 -100 前缀，例如：/monitor add 1234567890")
                     return True
 
                 if action == 'add':
                     added = self.add_monitor_chat_id(chat_id)
                     if added:
-                        await event.respond(f"✅ 已添加自动监听源频道：{chat_id}\n\n{self.format_monitor_chat_ids()}")
+                        await respond(f"✅ 已添加自动监听源频道：{chat_id}\n\n{self.format_monitor_chat_ids()}")
                     else:
-                        await event.respond(f"ℹ️ 该频道已在监听列表中：{chat_id}")
+                        await respond(f"ℹ️ 该频道已在监听列表中：{chat_id}")
                     return True
 
                 removed = self.remove_monitor_chat_id(chat_id)
                 if removed:
-                    await event.respond(f"✅ 已删除自动监听源频道：{chat_id}\n\n{self.format_monitor_chat_ids()}")
+                    await respond(f"✅ 已删除自动监听源频道：{chat_id}\n\n{self.format_monitor_chat_ids()}")
                 else:
-                    await event.respond(f"ℹ️ 该频道不在监听列表中：{chat_id}")
+                    await respond(f"ℹ️ 该频道不在监听列表中：{chat_id}")
                 return True
 
             if action == 'set':
                 if len(parts) < 3:
-                    await event.respond(
+                    await respond(
                         "❌ 缺少频道 ID 列表\n\n"
                         "用法：/monitor set <源频道裸ID1,源频道裸ID2>\n"
                         "示例：/monitor set 1234567890,9876543210"
                     )
                     return True
-                new_ids = parse_chat_ids(" ".join(parts[2:]).replace('，', ','))
-                if not new_ids:
-                    await event.respond("❌ 未解析到有效频道 ID，请检查格式")
+                items = " ".join(parts[2:]).replace('，', ',').split(',')
+                ids = [parse_monitor_chat_id(item) for item in items]
+                if None in ids:
+                    await respond("❌ 列表中有空项或无效频道 ID，原监听列表未更改。请用逗号分隔裸频道 ID。")
                     return True
-                deduped_ids = []
-                for chat_id in new_ids:
-                    normalized_chat_id = self.normalize_source_chat_id(chat_id)
-                    if all(self.normalize_source_chat_id(existing_id) != normalized_chat_id for existing_id in deduped_ids):
-                        deduped_ids.append(chat_id)
-                self.monitor_chat_ids = deduped_ids
-                await event.respond(f"✅ 已覆盖自动监听源频道列表\n\n{self.format_monitor_chat_ids()}")
+                self.monitor_chat_ids = list(dict.fromkeys(ids))
+                await respond(f"✅ 已覆盖自动监听源频道列表\n\n{self.format_monitor_chat_ids()}")
                 return True
 
-            await event.respond(
+            await respond(
                 "❌ 未知 /monitor 子命令\n\n"
                 "可用命令：\n"
                 "/monitor\n"
@@ -1639,33 +1747,16 @@ class TelegramBot:
 
         if command == '/flog':
             if len(parts) > 1 and parts[1].lower() == 'clear':
-                self.forward_log.clear()
-                await event.respond("🗑️ 已清除所有转发记录")
+                if len(parts) != 2:
+                    await respond("❌ /flog clear 不接受其他参数，历史未清除")
+                    return True
+                ok = self.forward_log.clear()
+                await respond("🗑️ 已清除所有转发记录" if ok else "⚠️ 历史文件未清除，请检查服务日志")
                 return True
 
-            logs = self.forward_log.get_recent(10)
-            if not logs:
-                await event.respond("📝 暂无转发记录")
-                return True
-
-            lines = ["📝 转发记录（最近10条）：\n"]
-            for log in logs:
-                status = "✅" if log['success'] else "❌"
-                entry = (
-                    f"{status} #{log['id']}\n"
-                    f"FROM: {log['from']}\n"
-                    f"TO:   {log['to']}\n"
-                    f"📅 {log['date']}\n"
-                )
-                if not log['success']:
-                    entry += f"错误: {log['error']}\n"
-                entry += "\n"
-                if sum(len(l) for l in lines) + len(entry) > 3800:
-                    break
-                lines.append(entry)
-
-            lines.append(f"共 {len(self.forward_log.get_all())} 条记录")
-            await event.respond("".join(lines))
+            rows = self.forward_log.get_all()
+            text = format_recent_history(rows[-10:], len(rows))
+            await respond(text, parse_mode=None, link_preview=False)
             return True
 
         if command == '/queue':
@@ -1674,7 +1765,7 @@ class TelegramBot:
             current_task = status["current_task"]
 
             if queue_size == 0 and not current_task:
-                await event.respond("📋 转发队列为空，当前没有正在处理或等待中的任务。")
+                await respond("📋 转发队列为空，当前没有正在处理或等待中的任务。")
                 return True
 
             lines = [
@@ -1688,7 +1779,7 @@ class TelegramBot:
                     f"状态：{current_task['status']}\n",
                     f"来源：{current_task['link']}\n",
                 ])
-            await event.respond("".join(lines))
+            await respond("".join(lines))
             return True
 
         if command == '/export_range':
@@ -1715,6 +1806,8 @@ class TelegramBot:
                         "使用消息链接作为起点时，需要再提供结束消息 ID 或结束消息链接。\n"
                         "示例：/export_range https://t.me/c/3482276715/100 200"
                     ),
+                    "extra_args": "❌ 范围导出参数过多，未创建任务。",
+                    "reversed_range": "❌ 消息范围无效：起始消息 ID 不能大于结束消息 ID。",
                     "invalid_end_id": (
                         "❌ 结束消息 ID 格式错误\n\n"
                         "结束位置请填写数字，或填写同一频道的消息链接。\n"
@@ -1722,28 +1815,20 @@ class TelegramBot:
                     ),
                     "invalid_range_id": (
                         "❌ 参数格式错误\n\n"
-                        "Chat ID、起始消息 ID、结束消息 ID 必须是数字；也可以使用 t.me/c 私有频道链接。\n"
+                        "Chat ID 不能为 0；起始及结束消息 ID 必须为 1 至 2147483647 的整数。\n"
                         "示例：/export_range 3482276715 100 200"
                     ),
                     "chat_mismatch": (
                         "❌ 起始消息链接和结束消息链接不属于同一个频道\n\n"
                         "请确认两个链接中的 Chat ID 一致。"
                     ),
-                    "public_link_not_supported": (
-                        "❌ 公开用户名链接无法自动提取数字 Chat ID\n\n"
+                    "invalid_source_link": (
+                        "❌ 来源必须是数字 Chat ID 或 t.me/c 频道、原帖链接，不能用公开用户名、评论或话题链接。\n\n"
                         "请改用 t.me/c/<Chat ID>/<消息ID> 链接，或手动填写 Chat ID。\n"
                         "示例：/export_range 3482276715 100 200"
                     ),
                 }
-                await event.respond(error_tips.get(parse_error, "❌ 参数解析失败，请检查 /export_range 用法。"))
-                return True
-
-            if start_id > end_id:
-                await event.respond(
-                    "❌ 消息范围无效\n\n"
-                    "起始消息 ID 不能大于结束消息 ID。\n"
-                    "示例：/export_range 3482276715 100 200"
-                )
+                await respond(error_tips.get(parse_error, "❌ 参数解析失败，请检查 /export_range 用法。"))
                 return True
 
             logger.info(f"处理 export_range 命令, chat_id: {chat_id}, range: {start_id}-{end_id}")
@@ -1753,19 +1838,23 @@ class TelegramBot:
 
             target_id = self.target_chat_id
             if target_id is None:
-                await event.respond("❌ 未配置目标频道ID，请先使用 /forwardto 设置")
+                await respond("❌ 未配置目标频道ID，请先使用 /forwardto 设置")
                 return True
-            status_msg = await event.respond("⏳ 正在加入范围导出队列...", _auto_delete=False)
-            self.remember_forward_status(status_msg.chat_id, status_msg.id)
+            status_msg = await send_status(event, "⏳ 正在加入范围导出队列...")
+            if status_msg is not None:
+                self.remember_forward_status(status_msg.chat_id, status_msg.id)
             gid = None
             position = await self.task_queue.add_task(
-                event, display_link, status_msg.id, event.chat_id, gid,
+                event, display_link, getattr(status_msg, "id", None), event.chat_id, gid,
                 mode="export_range",
                 message_ids=[start_id, end_id],
                 source_chat_id=chat_id,
                 status_client=getattr(status_msg, 'client', None) or self.client, target_chat_id=target_id,
             )
-            await status_msg.edit(
+            if position is None:
+                await edit_status(status_msg, "⏹️ 服务正在停止，范围导出未入队")
+                return True
+            await edit_status(status_msg,
                 f"⏳ 已加入范围导出队列\n"
                 f"队列位置: {position}\n"
                 f"源: {display_link}\n"
@@ -1778,29 +1867,14 @@ class TelegramBot:
 
     # ── Restart ─────────────────────────────────────────────────
 
+    def begin_shutdown(self) -> None:
+        # Close admissions even while the listener is still unwinding its connection.
+        self._stopping = True
+
     async def _restart(self) -> None:
-        script_path = os.path.abspath(sys.argv[0])
-        work_dir = os.path.dirname(script_path)
-        logger.info(f"重启机器人: {script_path}")
-        try:
-            await self.stop()
-            with open("google_bot.log", "a") as log_file:
-                subprocess.Popen(
-                    [sys.executable, script_path],
-                    cwd=work_dir,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-            await asyncio.sleep(2)
-            os._exit(0)
-        except Exception as e:
-            logger.error(f"重启失败: {e}")
-            for admin_id in ADMIN_IDS:
-                try:
-                    await self.client.send_message(admin_id, f"⚠️ 重启失败: {e}")
-                except Exception:
-                    pass
+        self.begin_shutdown()
+        self.restart_requested = True
+        await self.client.disconnect()  # main closes resources before replacing this process.
 
     # ── Lifecycle ───────────────────────────────────────────────
 
@@ -1809,20 +1883,95 @@ class TelegramBot:
             self._monitor_message_map = MonitorMessageMap(MONITOR_MAP_FILE)
         return self._monitor_message_map
 
+    @staticmethod
+    def cleanup_monitor_db(path: str, retention_days: int) -> int:
+        with closing(MonitorMessageMap(path)) as mappings:
+            return mappings.cleanup_if_due(retention_days)
+
     async def monitor_cleanup_loop(self) -> None:
         while True:
             try:
-                delay = self.monitor_message_map().cleanup_if_due(MONITOR_MAP_RETENTION_DAYS)
+                # Wait asynchronously for maintenance, never for its SQLite writer lock on the event loop.
+                async with self._monitor_db_lock:
+                    job = asyncio.create_task(asyncio.to_thread(self.cleanup_monitor_db, MONITOR_MAP_FILE,
+                                                                MONITOR_MAP_RETENTION_DAYS))
+                    try:
+                        delay = await asyncio.shield(job)
+                    except asyncio.CancelledError:
+                        # Cancelling to_thread does not stop SQLite; let its own connection close first.
+                        await asyncio.gather(job, return_exceptions=True)
+                        raise
             except (OSError, sqlite3.Error):
                 logger.exception("monitor-data 清理失败，一小时后重试")
                 delay = 3600
             await asyncio.sleep(delay)
 
+    def _register_bot_handlers(self) -> None:
+        @self.client.on(events.NewMessage)
+        async def message_handler(event):
+            if self._stopping:
+                return
+            try:
+                text = event.message.text or ""
+                logger.info(
+                    f"收到消息: chat_id={event.chat_id}, msg_id={event.message.id}, "
+                    f"sender_id={event.sender_id}, is_channel={event.is_channel}, "
+                    f"post={getattr(event.message, 'post', None)}"
+                )
+
+                # Forward headers and broadcast posts are data, even if the caption is an admin command.
+                forwarded = bool(event.message.forward)
+                parts = text.split(maxsplit=1)
+                match = (re.fullmatch(r"(/[A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?", parts[0])
+                         if parts and not forwarded and not event.out else None)
+                command = match[1].lower() if match else None
+                if command == '/chatid' and await self.command_is_for_me(match[2]):
+                    msg = await event.respond(self.format_chat_id(event))
+                    self.schedule_command_delete(msg)
+                    return
+
+                if self.is_monitor_post(event.message):
+                    if not self.is_user_monitor_active() and event.message.grouped_id is None:
+                        await self.enqueue_monitor_post(event, [event.message])
+                    return
+
+                peer = event.message.peer_id
+                if event.out or (isinstance(peer, types.PeerChannel) and
+                                 (event.message.post or peer.channel_id == self.monitor_target_channel_id())):
+                    return
+                if command:
+                    if not await self.command_is_for_me(match[2]):
+                        return
+                    if command == '/start':
+                        if event.sender_id in ADMIN_IDS:
+                            await event.respond(START_MESSAGE_ADMIN)
+                        elif can_submit(event.sender_id):
+                            await event.respond("🤖 你可以转发消息或发送 Telegram 消息链接。")
+                        else:
+                            await event.respond("🤖 此机器人仅接受授权用户投稿。")
+                    else:
+                        await self.handle_admin_command(event, command=command)
+                    return  # Unknown commands are not link submissions.
+                if not can_submit(event.sender_id):
+                    return
+                if event.message.forward or TELEGRAM_LINK_PATTERN.search(text):
+                    await self.do_forward(event)
+
+            except Exception as e:
+                logger.error(f"消息处理异常: {e}", exc_info=True)
+
+        self.register_monitor_events(self.client, fallback=True)
+
     async def start(self) -> None:
+        self._stopping = False
         await self.client.start(bot_token=BOT_TOKEN)
         if MONITOR_MAP_RETENTION_DAYS and self._monitor_cleanup_task is None:
             self._monitor_cleanup_task = asyncio.create_task(self.monitor_cleanup_loop())
         await self.task_queue.start()
+
+        if not self._bot_handlers_registered:
+            self._register_bot_handlers()
+            self._bot_handlers_registered = True
         await self.start_user_monitor()
 
         for admin_id in ADMIN_IDS:
@@ -1832,69 +1981,9 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"向管理员 {admin_id} 发送启动消息失败: {e}")
 
-        @self.client.on(events.NewMessage(pattern='/start'))
-        async def start_handler(event):
-            if event.sender_id in ADMIN_IDS:
-                await event.respond(START_MESSAGE_ADMIN)
-            elif can_submit(event.sender_id):
-                await event.respond("🤖 你可以转发消息或发送 Telegram 消息链接。")
-            else:
-                await event.respond("🤖 此机器人仅接受授权用户投稿。")
-
-        @self.client.on(events.NewMessage)
-        async def message_handler(event):
-            try:
-                text = event.message.text or ""
-                logger.info(
-                    f"收到消息: chat_id={event.chat_id}, msg_id={event.message.id}, "
-                    f"sender_id={event.sender_id}, is_channel={event.is_channel}, "
-                    f"post={getattr(event.message, 'post', None)}"
-                )
-
-                if text.split()[0].lower() == '/chatid' if text.split() else False:
-                    event_chat_ids = await self.get_event_chat_ids(event)
-                    lines = ["🆔 当前聊天/频道 ID：\n"]
-                    if event_chat_ids:
-                        for chat_id in event_chat_ids:
-                            lines.append(f"- {chat_id}，裸 ID: {self.normalize_source_chat_id(chat_id)}\n")
-                    else:
-                        lines.append("无法获取 chat_id\n")
-                    lines.append("\n可用以下命令添加监听：\n")
-                    if event_chat_ids:
-                        lines.append(f"/monitor add {event_chat_ids[0]}")
-                    else:
-                        lines.append("/monitor add <频道ID>")
-                    msg = await event.respond("".join(lines))
-                    self.schedule_command_delete(msg)
-                    return
-
-                if text.startswith('/'):
-                    if await self.handle_admin_command(event):
-                        return
-
-                if self.is_monitor_post(event.message):
-                    if not self.is_user_monitor_active() and event.message.grouped_id is None:
-                        await self.enqueue_monitor_post(event, [event.message])
-                    return
-
-                if (isinstance(event.message.peer_id, types.PeerChannel)
-                        and event.message.peer_id.channel_id == self.monitor_target_channel_id()):
-                    return  # 不把复制到目标频道的链接帖当作手动转发请求。
-
-                if event.out or not can_submit(event.sender_id):
-                    return
-                if event.message.forward or self.extract_link(text):
-                    status_msg = await event.respond("⏳ 正在加入转发队列...")
-                    await self.do_forward(event, status_msg)
-
-            except Exception as e:
-                logger.error(f"消息处理异常: {e}", exc_info=True)
-
-        self.register_monitor_events(self.client, fallback=True)
-
         if self.monitor_chat_ids:
             logger.info(f"自动监听源频道已启用: {self.monitor_chat_ids}")
-            if self.user_monitor_running:
+            if self.is_user_monitor_active():
                 logger.info("源频道的新消息及编辑将由用户账号 Telethon client 监听，bot 只处理命令和状态消息")
             else:
                 logger.info("用户账号监听未运行，将回退到 bot；bot 需要源频道读取权限及目标频道发帖和编辑权限")
@@ -1905,12 +1994,19 @@ class TelegramBot:
         await self.client.run_until_disconnected()
 
     async def stop(self) -> None:
+        self.begin_shutdown()
         self.user_monitor_running = False
+        jobs = tuple(self._delete_tasks)
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
+        if self._user_monitor_watch is not None:
+            self._user_monitor_watch.cancel()
+            await asyncio.gather(self._user_monitor_watch, return_exceptions=True)
+            self._user_monitor_watch = None
         if self.user_client:
-            try:
-                await self.user_client.disconnect()
-            except Exception as e:
-                logger.error(f"断开用户监听客户端时出错: {e}")
+            await self._disconnect_user_monitor(self.user_client)
         await self.task_queue.stop()
         if self._monitor_cleanup_task is not None:
             self._monitor_cleanup_task.cancel()
@@ -1935,31 +2031,52 @@ async def main() -> None:
     if missing:
         raise SystemExit(f"请在 .env 或运行环境中配置：{', '.join(missing)}")
     bot = TelegramBot()
+    loop = asyncio.get_running_loop()
+    runner = asyncio.create_task(bot.start())
+    terminating = False
+    installed = False
+
+    def request_shutdown():
+        nonlocal terminating
+        if not terminating:
+            terminating = True
+            bot.begin_shutdown()
+            logger.info("收到 SIGTERM，正在停止服务")
+            runner.cancel()  # Cancel startup/listening only; never interrupt the cleanup below.
+
     try:
-        await bot.start()
+        try:
+            loop.add_signal_handler(signal.SIGTERM, request_shutdown)
+            installed = True
+        except (NotImplementedError, RuntimeError):
+            # Windows and non-main-thread loops do not support asyncio signal handlers.
+            pass
+        await runner
+    except asyncio.CancelledError:
+        if not terminating:
+            raise
     except KeyboardInterrupt:
         logger.info("用户手动停止")
-    except Exception as e:
-        error_msg = str(e)
-        if "FloodWaitError" in error_msg or "wait of" in error_msg.lower():
-            match = re.search(r'wait of (\d+) seconds', error_msg)
-            if match:
-                wait_time = int(match.group(1))
-                logger.error(f"Telegram 限流，需要等待 {wait_time} 秒 ({wait_time//60} 分钟)")
-                logger.error("请等待限流结束后手动重启: docker-compose restart")
-        else:
-            logger.error(f"致命错误: {e}", exc_info=True)
+    except (errors.AccessTokenInvalidError, errors.AccessTokenExpiredError):
+        logger.error("机器人令牌无效或已过期，请检查 .env 中的 BOT_TOKEN 并重建容器；不要分享令牌。")
+        raise SystemExit(2) from None
+    except errors.FloodWaitError as exc:
+        logger.error("启动受到 Telegram 限流，请在 %s 秒后重试", exc.seconds)
+        raise SystemExit(1) from None
+    except Exception:
+        logger.exception("机器人异常退出")
+        raise SystemExit(1) from None
     finally:
-        await bot.stop()
+        try:
+            await bot.stop()
+        finally:
+            if installed:
+                loop.remove_signal_handler(signal.SIGTERM)
+    if not terminating and bot.restart_requested:
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 if __name__ == "__main__":
-    for f in ("bot_session.session",):
-        try:
-            os.remove(f)
-        except FileNotFoundError:
-            pass
-
     asyncio.run(main())
 
 

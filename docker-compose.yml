@@ -2,11 +2,17 @@
   telegram-bot:
     build: .
     container_name: telegram-tdl-forwarder
-    restart: unless-stopped
+    restart: "on-failure:3"
+    stop_grace_period: 30s
     volumes:
-      - ./forward_history.json:/app/forward_history.json
+      - ./history:/data/history
       - monitor-data:/data/monitor
-      - /usr/local/bin/tdl:/usr/local/bin/tdl
+      - type: bind
+        source: /usr/local/bin/tdl
+        target: /usr/local/bin/tdl
+        read_only: true
+        bind:
+          create_host_path: false
       - ~/.tdl:/root/.tdl
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
@@ -18,6 +24,7 @@
       SUBMITTER_IDS: "${SUBMITTER_IDS:-}"
       FORWARD_TO_CHAT_ID: "${FORWARD_TO_CHAT_ID:-}"
       MONITOR_CHAT_IDS: "${MONITOR_CHAT_IDS:-}"
+      FORWARD_LOG_FILE: /data/history/forward_history.json
       MONITOR_MAP_FILE: /data/monitor/message_map.sqlite3
       MONITOR_MAP_RETENTION_DAYS: "${MONITOR_MAP_RETENTION_DAYS:-7}"
       USER_MONITOR_ENABLED: "${USER_MONITOR_ENABLED:-1}"

@@ -4,6 +4,10 @@
 *.session
 *.session-*
 *.log
+bot.log.[0-9]*
 *.sqlite3
 *.sqlite3-*
 __pycache__/
+/history/
+forward_history.json.corrupt-*
+.forward-history-*
