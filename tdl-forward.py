@@ -42,6 +42,13 @@ TDL_PATH = "/usr/local/bin/tdl"
 FORWARD_LOG_FILE = "forward_history.json"
 FORWARD_LOG_MAX_DAYS = 7  # 保留最近7天
 MONITOR_MAP_FILE = os.getenv("MONITOR_MAP_FILE", "").strip() or "monitor_message_map.sqlite3"
+MONITOR_CLEANUP_INTERVAL = 7 * 86400
+try:
+    MONITOR_MAP_RETENTION_DAYS = int(os.getenv("MONITOR_MAP_RETENTION_DAYS") or 7)
+    if not 0 <= MONITOR_MAP_RETENTION_DAYS <= 36500:
+        raise ValueError
+except ValueError:
+    raise SystemExit("MONITOR_MAP_RETENTION_DAYS 必须是 0 到 36500 之间的整数（0 表示不清理）") from None
 TELEGRAM_LINK_PATTERN = re.compile(r"https://t\.me/(?:c/)?[A-Za-z0-9_]+/\d+")
 EXCLUDE_KEYWORDS = ["addlist"]
 AUTO_DELETE_BOT_MESSAGES = os.getenv("AUTO_DELETE_BOT_MESSAGES", "1").lower() not in ("0", "false", "no", "off")
@@ -663,16 +670,32 @@ class MonitorMessageMap:
         self.db = sqlite3.connect(path)
         try:
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
                 self.db.execute("""
                     CREATE TABLE IF NOT EXISTS monitor_messages (
                         source_chat_id INTEGER NOT NULL,
                         source_message_id INTEGER NOT NULL,
                         target_chat_id INTEGER NOT NULL,
                         target_message_id INTEGER NOT NULL,
+                        confirmed_at INTEGER NOT NULL,
                         PRIMARY KEY (source_chat_id, source_message_id, target_chat_id)
                     )
                 """)
-                # 旧版本的已确认映射保持不动；此表只存尚未确认的发送。
+                columns = {row[1] for row in self.db.execute("PRAGMA table_info(monitor_messages)")}
+                if "confirmed_at" not in columns:
+                    # 无法推断旧回执时间，给旧映射一个完整保留期。DDL 和回填一同提交。
+                    self.db.execute("ALTER TABLE monitor_messages ADD COLUMN confirmed_at INTEGER NOT NULL DEFAULT 0")
+                    self.db.execute("UPDATE monitor_messages SET confirmed_at=?", (int(time.time()),))
+                self.db.execute("CREATE INDEX IF NOT EXISTS monitor_confirmed_at ON monitor_messages(confirmed_at)")
+                self.db.execute("CREATE TABLE IF NOT EXISTS monitor_cleanup "
+                                "(id INTEGER PRIMARY KEY CHECK(id=1), last_run INTEGER NOT NULL)")
+                self.db.execute("""
+                    CREATE TABLE IF NOT EXISTS monitor_pruned_through (
+                        source_chat_id INTEGER NOT NULL, target_chat_id INTEGER NOT NULL,
+                        last_id INTEGER NOT NULL, PRIMARY KEY (source_chat_id, target_chat_id)
+                    )
+                """)
+                # 此表只存尚未确认的发送；不参与定时清理。
                 self.db.execute("""
                     CREATE TABLE IF NOT EXISTS monitor_copy_intents (
                         source_chat_id INTEGER NOT NULL,
@@ -695,6 +718,37 @@ class MonitorMessageMap:
         ).fetchone()
         return row[0] if row else None
 
+    def needs_copy(self, source_chat_id: int, source_message_id: int, target_chat_id: int) -> bool:
+        if self.get(source_chat_id, source_message_id, target_chat_id) is not None:
+            return False
+        # 已过期帖不能因事件重放而成为“新帖”。每对频道只保留一个序号，不保留逐帖记录。
+        return self.db.execute(
+            "SELECT 1 FROM monitor_pruned_through WHERE source_chat_id=? AND target_chat_id=? AND last_id>=?",
+            (source_chat_id, target_chat_id, source_message_id),
+        ).fetchone() is None
+
+    def cleanup_if_due(self, retention_days: int) -> int:
+        """原子提交清理水位和最后成功时间，返回下次检查前的秒数。"""
+        if retention_days <= 0:
+            return MONITOR_CLEANUP_INTERVAL
+        now = int(time.time())
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            last = self.db.execute("SELECT last_run FROM monitor_cleanup WHERE id=1").fetchone()
+            if last and 0 <= now - last[0] < MONITOR_CLEANUP_INTERVAL:
+                return MONITOR_CLEANUP_INTERVAL - (now - last[0])
+            cutoff = now - retention_days * 86400
+            self.db.execute("""
+                INSERT INTO monitor_pruned_through (source_chat_id, target_chat_id, last_id)
+                SELECT source_chat_id, target_chat_id, MAX(source_message_id) FROM monitor_messages
+                WHERE confirmed_at <= ? GROUP BY source_chat_id, target_chat_id
+                ON CONFLICT(source_chat_id, target_chat_id) DO UPDATE SET last_id=MAX(last_id, excluded.last_id)
+            """, (cutoff,))
+            removed = self.db.execute("DELETE FROM monitor_messages WHERE confirmed_at <= ?", (cutoff,)).rowcount
+            self.db.execute("INSERT OR REPLACE INTO monitor_cleanup (id, last_run) VALUES (1, ?)", (now,))
+        logger.info("monitor-data 清理完成：移除 %s 条已确认映射，保留期 %s 天", removed, retention_days)
+        return MONITOR_CLEANUP_INTERVAL
+
     def reserve(self, source_chat_id: int, target_chat_id: int, ids: list[int]) -> dict[int, int]:
         """RPC 前提交意图；已有映射或未确认的意图都不能重新发送。"""
         reserved = {}
@@ -702,7 +756,7 @@ class MonitorMessageMap:
             self.db.execute("BEGIN IMMEDIATE")
             for mid in ids:
                 key = (source_chat_id, mid, target_chat_id)
-                if self.get(*key) is not None:
+                if not self.needs_copy(*key):
                     continue
                 nonce = secrets.randbits(63) or 1
                 cursor = self.db.execute(
@@ -728,8 +782,9 @@ class MonitorMessageMap:
     def remember(self, source_chat_id: int, target_chat_id: int, pairs: dict[int, int]) -> None:
         with self.db:
             self.db.executemany(
-                "INSERT INTO monitor_messages VALUES (?, ?, ?, ?)",
-                [(source_chat_id, source_id, target_chat_id, target_id) for source_id, target_id in pairs.items()],
+                "INSERT INTO monitor_messages (source_chat_id,source_message_id,target_chat_id,target_message_id,confirmed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(source_chat_id, src, target_chat_id, dst, int(time.time())) for src, dst in pairs.items()],
             )
             self.db.executemany(
                 "DELETE FROM monitor_copy_intents WHERE source_chat_id=? AND source_message_id=? AND target_chat_id=?",
@@ -953,6 +1008,7 @@ class TelegramBot:
         self._album_processed: set[int] = set()
         self._forward_status_ids: dict[tuple[int, int], None] = {}
         self._monitor_message_map: Optional[MonitorMessageMap] = None
+        self._monitor_cleanup_task: Optional[asyncio.Task] = None
         self.task_queue = TaskQueue(self)
 
     # ── Link utilities ──────────────────────────────────────────
@@ -1223,9 +1279,7 @@ class TelegramBot:
         source_id, target_id = task.source_chat_id, task.target_chat_id
         message_ids = task.message_ids
         try:
-            if self._monitor_message_map is None:
-                self._monitor_message_map = MonitorMessageMap(MONITOR_MAP_FILE)
-            mappings = self._monitor_message_map
+            mappings = self.monitor_message_map()
             client = task.event.client
 
             if task.mode == "monitor_edit":
@@ -1246,7 +1300,7 @@ class TelegramBot:
                 await self.edit_monitor_message(client, target_peer, target_msg_id, current)
                 logger.info("已同步频道编辑：%s -> %s/%s", task.link, target_id, target_msg_id)
             else:
-                pending = [mid for mid in message_ids if mappings.get(source_id, mid, target_id) is None]
+                pending = [mid for mid in message_ids if mappings.needs_copy(source_id, mid, target_id)]
                 if not pending:
                     task.status = TaskStatus.COMPLETED
                     return
@@ -1254,7 +1308,7 @@ class TelegramBot:
                 target_peer = await self.get_monitor_target_peer(client, target_id)
                 reserved = mappings.reserve(source_id, target_id, pending)
                 if not reserved:
-                    task.status = (TaskStatus.UNCONFIRMED if any(mappings.get(source_id, mid, target_id) is None
+                    task.status = (TaskStatus.UNCONFIRMED if any(mappings.needs_copy(source_id, mid, target_id)
                                                                for mid in pending) else TaskStatus.COMPLETED)
                     return
                 try:
@@ -1750,8 +1804,24 @@ class TelegramBot:
 
     # ── Lifecycle ───────────────────────────────────────────────
 
+    def monitor_message_map(self) -> MonitorMessageMap:
+        if self._monitor_message_map is None:
+            self._monitor_message_map = MonitorMessageMap(MONITOR_MAP_FILE)
+        return self._monitor_message_map
+
+    async def monitor_cleanup_loop(self) -> None:
+        while True:
+            try:
+                delay = self.monitor_message_map().cleanup_if_due(MONITOR_MAP_RETENTION_DAYS)
+            except (OSError, sqlite3.Error):
+                logger.exception("monitor-data 清理失败，一小时后重试")
+                delay = 3600
+            await asyncio.sleep(delay)
+
     async def start(self) -> None:
         await self.client.start(bot_token=BOT_TOKEN)
+        if MONITOR_MAP_RETENTION_DAYS and self._monitor_cleanup_task is None:
+            self._monitor_cleanup_task = asyncio.create_task(self.monitor_cleanup_loop())
         await self.task_queue.start()
         await self.start_user_monitor()
 
@@ -1842,6 +1912,13 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"断开用户监听客户端时出错: {e}")
         await self.task_queue.stop()
+        if self._monitor_cleanup_task is not None:
+            self._monitor_cleanup_task.cancel()
+            try:
+                await self._monitor_cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_cleanup_task = None
         if self._monitor_message_map is not None:
             self._monitor_message_map.close()
             self._monitor_message_map = None

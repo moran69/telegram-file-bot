@@ -344,6 +344,57 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
         await self.enqueue(self.event(91), edited=True)
         await self.process()
         self.assertEqual(self.bot.client.edit_message.await_args.args[1], 350)
+        mappings = self.bot.monitor_message_map()
+        mappings.cleanup_if_due(7)
+        self.assertEqual(mappings.get(SOURCE, 91, TARGET), 350)
+
+    async def test_weekly_retention_survives_restart_and_never_reposts(self):
+        start = 1800000000
+        week = 7 * 86400
+        m = self.bot.monitor_message_map()
+        with patch.object(app.time, 'time', return_value=start):
+            m.remember(SOURCE, TARGET, {9: 90})
+            reserved = m.reserve(SOURCE, TARGET, [12])
+            self.assertIn(12, reserved)
+            self.assertEqual(m.cleanup_if_due(7), week)
+        with patch.object(app.time, 'time', return_value=start + week - 1):
+            m.remember(SOURCE, TARGET, {10: 100})
+            await self.bot.stop()
+            self.bot = self.make_bot()
+            m = self.bot.monitor_message_map()
+            self.assertEqual(m.cleanup_if_due(7), 1)
+            self.assertEqual(m.get(SOURCE, 9, TARGET), 90)
+        with patch.object(app.time, 'time', return_value=start + week):
+            m.cleanup_if_due(0)
+            self.assertEqual(m.get(SOURCE, 9, TARGET), 90)
+            self.assertEqual(m.cleanup_if_due(7), week)
+            self.assertIsNone(m.get(SOURCE, 9, TARGET))
+            self.assertEqual(m.get(SOURCE, 10, TARGET), 100)
+            self.assertEqual(m.reserve(SOURCE, TARGET, [9, 12]), {})
+            self.assertEqual(m.db.execute('SELECT random_id FROM monitor_copy_intents').fetchall(), [(reserved[12],)])
+            self.assertTrue(m.needs_copy(SOURCE, 9, TARGET+1))
+            for edited in (False, True):
+                await self.enqueue(self.event(9), edited=edited)
+                self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+            self.bot.client.forward.assert_not_awaited()
+            self.bot.client.edit_message.assert_not_awaited()
+
+    async def test_cleanup_runs_even_without_events_and_stops_with_bot(self):
+        m = self.bot.monitor_message_map()
+        m.remember(SOURCE, TARGET, {1: 42})
+        with m.db:
+            m.db.execute('UPDATE monitor_messages SET confirmed_at=1')
+        self.bot.task_queue.start = AsyncMock()
+        with patch.object(app, 'MONITOR_MAP_RETENTION_DAYS', 7):
+            await self.bot.start()
+            await asyncio.sleep(0)
+            self.assertIsNone(m.get(SOURCE, 1, TARGET))
+            timer = self.bot._monitor_cleanup_task
+            await self.bot.stop()
+            self.assertTrue(timer.cancelled())
+        with patch.object(app, 'MONITOR_MAP_RETENTION_DAYS', 0):
+            await self.bot.start()
+            self.assertIsNone(self.bot._monitor_cleanup_task)
 
     async def test_transient_edit_reloads_latest_text_on_retry(self):
         await self.enqueue(self.event(3)); await self.process()
