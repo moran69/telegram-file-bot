@@ -50,6 +50,26 @@ AUTO_DELETE_COMMAND_SECONDS = int(os.getenv("AUTO_DELETE_COMMAND_SECONDS", "120"
 AUTO_DELETE_ERROR_SECONDS = int(os.getenv("AUTO_DELETE_ERROR_SECONDS", "600"))
 
 
+def monitor_visual_media(media) -> Optional[types.InputMediaPhoto | types.InputMediaDocument]:
+    """可原地同步的图片/视频；网页预览、贴纸、视频留言等仍只同步文字。"""
+    if isinstance(media, types.MessageMediaPhoto) and isinstance(media.photo, types.Photo):
+        result = utils.get_input_media(media)
+    elif isinstance(media, types.MessageMediaDocument) and isinstance(media.document, types.Document):
+        doc = media.document
+        if any(isinstance(a, types.DocumentAttributeSticker) or
+               (isinstance(a, types.DocumentAttributeVideo) and a.round_message) for a in doc.attributes):
+            return None
+        if not (doc.mime_type.startswith(("video/", "image/")) or
+                any(isinstance(a, types.DocumentAttributeVideo) for a in doc.attributes)):
+            return None
+        result = utils.get_input_media(media)
+    else:
+        return None
+    # Telethon 1.28.5 的 get_input_media 保留文件引用和 TTL，但不复制剧透标记。
+    result.spoiler = media.spoiler
+    return result
+
+
 class TaskStatus(Enum):
     PENDING = "pending"
     PROCESSING = "processing"
@@ -1178,6 +1198,27 @@ class TelegramBot:
             except Exception as exc:
                 logger.debug("发送频道复制状态失败：%s", exc)
 
+    @staticmethod
+    async def edit_monitor_message(client, target_peer, target_msg_id, current) -> None:
+        file = monitor_visual_media(current.media)
+        if file is not None:
+            target = await client.get_messages(target_peer, ids=target_msg_id)
+            if target is None or isinstance(target, types.MessageEmpty):
+                raise ValueError(f"目标消息 {target_msg_id} 已删除或不可读取，不能原地编辑")
+            previous = monitor_visual_media(target.media)
+            # 同一媒体重新读取时 file_reference 可以变化；仅改说明不重新挂载媒体。
+            if (type(previous) is type(file) and previous.id.id == file.id.id and
+                    bool(previous.spoiler) == bool(file.spoiler)):
+                file = None
+        try:
+            await client.edit_message(
+                target_peer, target_msg_id, text=current.raw_text or "", file=file,
+                formatting_entities=current.entities or [], parse_mode=None,
+                link_preview=isinstance(current.media, types.MessageMediaWebPage),
+            )
+        except errors.MessageNotModifiedError:
+            pass
+
     async def process_monitor_task(self, task: ForwardTask) -> None:
         source_id, target_id = task.source_chat_id, task.target_chat_id
         message_ids = task.message_ids
@@ -1194,7 +1235,7 @@ class TelegramBot:
                     logger.info("跳过频道编辑（没有转发映射）：%s, target=%s", task.link, target_id)
                     task.status = TaskStatus.COMPLETED
                     return
-                # 出队后取源帖最新版本，避免较旧的编辑事件覆盖新正文。
+                # 出队后取源帖最新版本，避免较旧的编辑事件覆盖新的正文或媒体。
                 source_peer = await task.event.get_input_chat()
                 current = await client.get_messages(source_peer, ids=source_msg_id)
                 if current is None:
@@ -1202,14 +1243,7 @@ class TelegramBot:
                     task.status = TaskStatus.COMPLETED
                     return
                 target_peer = await self.get_monitor_target_peer(client, target_id)
-                try:
-                    await client.edit_message(
-                        target_peer, target_msg_id, text=current.raw_text or "",
-                        formatting_entities=current.entities or [], parse_mode=None,
-                        link_preview=isinstance(current.media, types.MessageMediaWebPage),
-                    )
-                except errors.MessageNotModifiedError:
-                    pass
+                await self.edit_monitor_message(client, target_peer, target_msg_id, current)
                 logger.info("已同步频道编辑：%s -> %s/%s", task.link, target_id, target_msg_id)
             else:
                 pending = [mid for mid in message_ids if mappings.get(source_id, mid, target_id) is None]
@@ -1256,13 +1290,14 @@ class TelegramBot:
             self.forward_log.add(task.link, target_id, False, str(exc))
             await self.report_monitor_copy(f"⚠️ 自动复制结果待核对：{task.link} → {target_id}\n{exc}", failed=True)
         except Exception as exc:
-            # 只重试编辑；重新出队会重读映射和最新正文，不执行任何复制请求。
+            # 只重试编辑；重新出队会重读映射、最新正文和媒体引用，不执行任何复制请求。
             if task.mode == "monitor_edit" and task.edit_retries < 2:
                 delay = None
                 if isinstance(exc, errors.FloodWaitError):
                     delay = max(1, exc.seconds)
                 elif isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError,
-                                      errors.ServerError, errors.TimedOutError)):
+                                      errors.ServerError, errors.TimedOutError,
+                                      errors.FileReferenceExpiredError, errors.FileReferenceInvalidError)):
                     delay = 2 ** (task.edit_retries + 1)
                 if delay is not None:
                     self.task_queue.retry_edit_later(task, delay)

@@ -22,6 +22,16 @@ with patch.object(logging, 'FileHandler', lambda *args: logging.NullHandler()):
 SOURCE, TARGET = 1012345678, 1098765432
 
 
+def photo(mid, ref=b'photo-ref', spoiler=False):
+    return types.MessageMediaPhoto(photo=types.Photo(mid, 42, ref, None, [], 1), spoiler=spoiler)
+
+
+def document(mid, mime='video/mp4', attributes=None, ref=b'video-ref', spoiler=False):
+    attrs = [types.DocumentAttributeVideo(3, 32, 32)] if attributes is None else attributes
+    doc = types.Document(mid, 42, ref, None, mime, 100, 1, attrs)
+    return types.MessageMediaDocument(document=doc, spoiler=spoiler)
+
+
 class FakeClient:
     def __init__(self, *args):
         self.handlers = {}
@@ -110,7 +120,7 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
         client.get_messages.assert_awaited_once_with(types.InputPeerChannel(SOURCE, 20), ids=12)
         client.edit_message.assert_awaited_once_with(
             types.InputPeerChannel(TARGET, 10), 736, text='new caption', formatting_entities=entities,
-            parse_mode=None, link_preview=False,
+            parse_mode=None, link_preview=False, file=None,
         )
         client.forward.assert_not_awaited()
 
@@ -143,8 +153,97 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
         client.forward.assert_awaited_once()
         client.edit_message.assert_awaited_once_with(
-            types.InputPeerChannel(TARGET, 10), 727, text='', formatting_entities=[], parse_mode=None, link_preview=False,
+            types.InputPeerChannel(TARGET, 10), 727, text='', formatting_entities=[], parse_mode=None, link_preview=False, file=None,
         )
+
+    async def test_replaced_media_edits_only_mapped_album_member(self):
+        client = self.bot.client
+        await self.enqueue(self.event(7, 9, album=42)); await self.process()
+        entities = [types.MessageEntityBold(0, 3)]
+        for old, latest, kind in [
+            (photo(1), photo(2, spoiler=True), types.InputMediaPhoto),
+            (document(1), document(2), types.InputMediaDocument),
+            (photo(2), document(2), types.InputMediaDocument),  # same numeric ID, different type
+            (document(1, 'image/png', []), document(2, 'image/png', []), types.InputMediaDocument),
+            (photo(2), photo(2, spoiler=True), types.InputMediaPhoto),
+        ]:
+            with self.subTest(media=kind, spoiler=latest.spoiler):
+                client.get_messages.reset_mock(); client.edit_message.reset_mock()
+                client.get_messages.side_effect = [NS(media=latest, raw_text='new', entities=entities), NS(media=old)]
+                await self.enqueue(self.event(9, album=42), edited=True)
+                self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+                self.assertEqual([a.args[0].channel_id for a in client.get_messages.await_args_list], [SOURCE, TARGET])
+                self.assertEqual([a.kwargs['ids'] for a in client.get_messages.await_args_list], [9, 727])
+                client.edit_message.assert_awaited_once()
+                args, kw = client.edit_message.await_args
+                self.assertEqual(args, (types.InputPeerChannel(TARGET, 10), 727))
+                self.assertEqual((kw['text'], kw['formatting_entities']), ('new', entities))
+                self.assertIsInstance(kw['file'], kind)
+                asset = latest.photo if kind is types.InputMediaPhoto else latest.document
+                self.assertEqual((kw['file'].id.id, kw['file'].id.file_reference), (2, asset.file_reference))
+                self.assertEqual(kw['file'].spoiler, latest.spoiler)
+        client.forward.assert_awaited_once()
+        client.send_message.assert_not_awaited()
+
+    async def test_caption_only_media_edit_does_not_replace_same_file(self):
+        client = self.bot.client
+        await self.enqueue(self.event(8)); await self.process()
+        client.get_messages.side_effect = [NS(media=photo(2, b'fresh'), raw_text='', entities=[]),
+                                           NS(media=photo(2, b'older'))]
+        await self.enqueue(self.event(8), edited=True)
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        client.edit_message.assert_awaited_once_with(types.InputPeerChannel(TARGET, 10), 724, text='',
+                                                     file=None, formatting_entities=[], parse_mode=None,
+                                                     link_preview=False)
+
+    async def test_web_preview_and_other_documents_keep_text_only_path(self):
+        client = self.bot.client
+        await self.enqueue(self.event(8)); await self.process()
+        for media in (types.MessageMediaWebPage(types.WebPageEmpty(1)), document(1, 'application/pdf', []),
+                      document(1, 'video/mp4', [types.DocumentAttributeVideo(3, 32, 32, round_message=True)])):
+            with self.subTest(media=media):
+                client.get_messages.reset_mock(); client.edit_message.reset_mock()
+                client.get_messages.return_value = NS(media=media, raw_text='edited', entities=None)
+                await self.enqueue(self.event(8), edited=True)
+                self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+                client.get_messages.assert_awaited_once_with(types.InputPeerChannel(SOURCE, 20), ids=8)
+                kw = client.edit_message.await_args.kwargs
+                self.assertEqual((kw['text'], kw['file'], kw['link_preview']),
+                                 ('edited', None, isinstance(media, types.MessageMediaWebPage)))
+
+    async def test_missing_media_target_or_rejected_replacement_does_not_repost(self):
+        client = self.bot.client
+        await self.enqueue(self.event(6)); await self.process()
+        latest = NS(media=photo(10), raw_text='', entities=None)
+        client.get_messages.side_effect = [latest, None, latest, NS(media=photo(9))]
+        client.edit_message.side_effect = errors.MediaNewInvalidError(request=None)
+        for _ in range(2):
+            await self.enqueue(self.event(6), edited=True)
+            with self.assertLogs(app.logger, 'ERROR'):
+                self.assertEqual((await self.process()).status, app.TaskStatus.FAILED)
+        client.edit_message.assert_awaited_once()
+        client.forward.assert_awaited_once()
+        client.send_message.assert_not_awaited()
+        self.assertFalse(self.bot.task_queue._retry_timers)
+
+    async def test_expired_reference_retries_with_latest_media_and_caption(self):
+        client = self.bot.client
+        await self.enqueue(self.event(3)); await self.process()
+        target = NS(media=document(1))
+        client.get_messages.side_effect = [NS(media=document(2, ref=b'expired'), raw_text='old', entities=[]), target,
+                                           NS(media=document(3, ref=b'fresh'), raw_text='', entities=[]), target]
+        client.edit_message.side_effect = [errors.FileReferenceExpiredError(request=None), None]
+        await self.enqueue(self.event(3), edited=True)
+        loop = asyncio.get_running_loop()
+        call_later = loop.call_later
+        with patch.object(loop, 'call_later', side_effect=lambda delay, cb: call_later(0, cb)):
+            self.assertEqual((await self.process()).status, app.TaskStatus.PENDING)
+        await asyncio.sleep(0.01)
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        self.assertEqual([(a.args[1], a.kwargs['text'], a.kwargs['file'].id.file_reference)
+                          for a in client.edit_message.await_args_list], [(709, 'old', b'expired'), (709, '', b'fresh')])
+        client.forward.assert_awaited_once()
+        client.send_message.assert_not_awaited()
 
     async def test_missing_target_message_does_not_repost(self):
         event = self.event(7)
