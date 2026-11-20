@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock, patch
 
 from telethon import TelegramClient, events, types
-from test_monitor_sync import app, FakeClient, SOURCE, TARGET
+from bot_fixture import app, FakeClient, SOURCE, TARGET
 
 UID = 61
 
@@ -83,6 +83,22 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
 
     async def reply(self, text):
         return await self.text(text, reply=self.session.prompt_id)
+
+    async def test_cancel_ack_failure_revokes_prompt_before_network_io(self):
+        await self.click('🔄 手动同步')
+        prompt = self.session.prompt_id
+        async def broken_ack():
+            self.assertEqual(self.session.prompt_id, 0)
+            raise ConnectionError('ack failed')
+        ev = NS(data=self.button('取消并返回'), sender_id=UID, chat_id=UID, message_id=self.session.mid,
+                answer=broken_ack)
+        with self.assertLogs('admin_panel', 'ERROR'):
+            await self.cb(ev)
+        self.assertNotIn(UID, self.bot.admin_panel.sessions)
+        old = await self.text(f'https://t.me/c/{SOURCE}/42', reply=prompt)
+        self.assertIn('已失效', old.respond.await_args.args[0])
+        self.bot.do_forward.assert_not_awaited()
+        self.assertTrue(self.bot.task_queue.queue.empty())
 
     async def test_home_pages_refresh_back_and_context(self):
         self.assertEqual(self.page.raw_text, app.START_MESSAGE_ADMIN)

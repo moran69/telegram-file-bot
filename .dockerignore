@@ -4,4 +4,6 @@
 !requirements.txt
 !tdl-forward.py
 !admin_panel.py
+!task_journal.py
+!monitor_clone.py
 !gen_telethon_session.py

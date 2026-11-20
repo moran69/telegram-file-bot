@@ -117,11 +117,11 @@ class AdminPanel:
                 return
             action = s.choices[event.data]
             s.choices.clear()  # Consume this generation before any network I/O.
-            await event.answer()
-            s.prompt_id = 0  # Navigation cancels a pending input.
-            if not self.allowed(uid):
-                return
+            s.prompt_id = 0
             try:
+                await event.answer()
+                if not self.allowed(uid):
+                    return
                 if s.expires and time.monotonic() >= s.expires and action != 'home':
                     await self._result(s, '⌛ 操作已过期，未执行。')
                 elif action == 'confirm':
@@ -135,7 +135,10 @@ class AdminPanel:
     async def _unavailable(self, s):
         self.sessions.pop(s.owner, None)
         logger.exception('管理面板操作或消息更新失败')
-        await self.bot.client.send_message(s.owner, '面板未能完成反馈。请用 /start 重开并核对当前状态，不要直接重复操作。')
+        try:
+            await self.bot.client.send_message(s.owner, '面板未能完成反馈。请用 /start 重开并核对当前状态，不要直接重复操作。')
+        except Exception:
+            logger.warning('无法投递面板恢复提示，旧面板已失效', exc_info=True)
 
     async def _navigate(self, s, event, action):
         if action == 'home':

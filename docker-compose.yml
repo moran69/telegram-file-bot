@@ -24,6 +24,7 @@
       SUBMITTER_IDS: "${SUBMITTER_IDS:-}"
       FORWARD_TO_CHAT_ID: "${FORWARD_TO_CHAT_ID:-}"
       MONITOR_CHAT_IDS: "${MONITOR_CHAT_IDS:-}"
+      MONITOR_TDL_FALLBACK: "${MONITOR_TDL_FALLBACK:-1}"
       FORWARD_LOG_FILE: /data/history/forward_history.json
       MONITOR_MAP_FILE: /data/monitor/message_map.sqlite3
       MONITOR_MAP_RETENTION_DAYS: "${MONITOR_MAP_RETENTION_DAYS:-7}"
