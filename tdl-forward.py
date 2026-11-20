@@ -17,6 +17,7 @@ import socket
 import sqlite3
 import threading
 from telethon import TelegramClient, errors, events, functions, types, utils
+from telethon import __version__ as TELETHON_VERSION
 from telethon.sessions import MemorySession, StringSession
 from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ from functools import partial
 
 from admin_panel import AdminPanel
 from task_journal import TaskJournal
-from monitor_clone import media_key, source_posts, uploaded_media, publish_request, receipt_pairs
+from monitor_clone import media_key, source_posts, upload_batch, publish_request, receipt_pairs
 
 # ─────────────────────────── Logging ───────────────────────────
 logger = logging.getLogger(__name__)
@@ -49,6 +50,8 @@ def configure_logging() -> None:
 
 if __name__ == "__main__":
     configure_logging()
+    logger.info("[启动/环境] Python %s | Telethon %s | SQLite %s | 本地时区 %s；开始读取配置",
+                sys.version.split()[0], TELETHON_VERSION, sqlite3.sqlite_version, time.strftime('%Z %z'))
 
 # ─────────────────────────── Config ────────────────────────────
 try:
@@ -268,14 +271,16 @@ class TaskQueue:
         count, _ = self.journal.reviews()
         self._edits.update(edits)
         self._early_edits.update(early)
+        delayed = 0
         for task in ready:
             if task.ready_at > time.time():
                 self._schedule_retry(task, task.ready_at - time.time())
+                delayed += 1
             else:
                 self.queue.put_nowait(task)
         self._loaded = True
-        if rows or count:
-            logger.info('恢复队列：%d 条等待，%d 条待核对（不会重发）', self.get_queue_status()['queue_size'], count)
+        logger.info('[启动/队列] 读取 %d 条持久化记录：立即入队 %d，定时重试 %d，等待编辑映射 %d，待核对 %d（不重发）',
+                    len(rows), len(ready) - delayed, delayed, len(early), count)
 
     def begin_send(self, task):
         self.journal.save(task, 'sending')
@@ -859,7 +864,7 @@ def parse_chat_ids(raw: str) -> list[int]:
         chat_id = parse_monitor_chat_id(item)
         if chat_id is None:
             if item.strip():
-                logger.warning(f"忽略无效监听源频道裸ID: {item}")
+                logger.warning("忽略 MONITOR_CHAT_IDS 中的无效频道 ID；请填写以英文逗号分隔的裸 ID")
             continue
         result.append(chat_id)
     return list(dict.fromkeys(result))
@@ -884,6 +889,8 @@ class ForwardLog:
         self.log_file = Path(log_file)
         self.writable = True
         self.logs: list[dict] = self._load()
+        logger.info('[启动/存储] 转发历史：%s；载入 %d 条；%s', self.log_file, len(self.logs),
+                    '允许写入' if self.writable else '已停用写入以保护原件')
         self._last_id = max((int(r['id']) for r in self.logs if re.fullmatch(r'[0-9]{1,20}', str(r['id']))), default=0)
         self._state_lock, self._disk_lock = threading.Lock(), threading.Lock()
         self._version = self._saved = 0
@@ -1510,6 +1517,7 @@ class TDLDownloader:
 # ─────────────────────────── TelegramBot ───────────────────────
 class TelegramBot:
     def __init__(self):
+        self._startup_phase = '初始化'
         self.client = TelegramClient(MemorySession(), API_ID, API_HASH, flood_sleep_threshold=0)
         self.user_client: Optional[TelegramClient] = None
         self.user_monitor_running = False
@@ -1622,7 +1630,7 @@ class TelegramBot:
             try:
                 await self.client.send_message(admin_id, text)
             except Exception as e:
-                logger.error(f"向管理员 {admin_id} 发送通知失败: {e}")
+                logger.error('向管理员发送通知失败（%s）', type(e).__name__)
 
     async def _delete_message_later(self, message, delay: int) -> None:
         if not message or delay <= 0:
@@ -1843,8 +1851,7 @@ class TelegramBot:
                 if set(reserved) != set(ids):
                     raise ValueError('相册成员未能完整预留，未发送')
             with tempfile.TemporaryDirectory(prefix='monitor-tdl-') as directory:
-                media = {p.id: await uploaded_media(self.tdl, client, target_peer, source_id, p, directory)
-                         for p in posts}
+                media = await upload_batch(self.tdl, client, source_peer, target_peer, source_id, posts, directory)
                 # Re-read after slow transfers: latest caption, never attach an obsolete media snapshot.
                 latest = {p.id: p for p in await source_posts(client, source_peer, ids, task.grouped_id)}
                 if set(latest) != set(ids) or any(media_key(latest[p.id]) != media_key(p) or
@@ -1919,7 +1926,8 @@ class TelegramBot:
                     with tempfile.TemporaryDirectory(prefix='monitor-edit-') as directory:
                         replacement = None
                         if key != cloned_key and key != 'text':
-                            replacement = await uploaded_media(self.tdl, client, target_peer, source_id, current, directory)
+                            media = await upload_batch(self.tdl, client, source_peer, target_peer, source_id, [current], directory)
+                            replacement = media[source_msg_id]
                             latest = await client.get_messages(source_peer, ids=source_msg_id)
                             if latest is None or isinstance(latest, types.MessageEmpty):
                                 raise ValueError('下载期间源帖已删除，未编辑目标消息')
@@ -2072,14 +2080,17 @@ class TelegramBot:
 
     async def start_user_monitor(self) -> None:
         if not USER_MONITOR_ENABLED:
+            logger.info('[启动/用户监听] USER_MONITOR_ENABLED 已关闭，使用 Bot 监听')
             return
         try:
             if USER_SESSION_STRING and not USER_SESSION_STRING.startswith("填入"):
+                logger.info('[启动/用户监听] 使用字符串会话；正在验证登录状态')
                 session = StringSession(USER_SESSION_STRING)
             elif USER_SESSION_FILE:
+                logger.info('[启动/用户监听] 使用文件会话；正在验证登录状态')
                 session = USER_SESSION_FILE
             else:
-                logger.info("用户账号监听未启用：未配置用户 session")
+                logger.info('[启动/用户监听] 未配置用户会话，使用 Bot 监听')
                 return
             self.user_client = TelegramClient(session, API_ID, API_HASH, flood_sleep_threshold=0)
         except Exception as exc:
@@ -2110,15 +2121,16 @@ class TelegramBot:
             me = await client.get_me()
             if me is not None:
                 self.user_monitor_running = True
-                logger.info("用户账号监听已启动: id=%s", me.id)
+                logger.info("用户账号监听已启动：会话已授权")
                 if not initial:
                     await self.notify_admins("✅ 用户账号监听已恢复，已从仅 Bot 监听切回双账号监听。")
                 return None
+            logger.warning('用户会话未授权或已失效；继续使用 Bot 监听')
             await self.notify_admins("⚠️ 用户 session 未授权或已失效，请更换并重启；继续使用 Bot 监听。")
         except (ConnectionError, TimeoutError, asyncio.TimeoutError, socket.gaierror, errors.ServerError,
                 errors.TimedOutError, errors.FloodWaitError) as exc:
-            logger.warning("用户监听连接暂时失败（%s），将重试", type(exc).__name__)
             retry_after = max(USER_MONITOR_RETRY_SECONDS, getattr(exc, 'seconds', 0))
+            logger.warning("用户监听连接暂时失败（%s），%d 秒后重试", type(exc).__name__, retry_after)
             if initial:
                 await self.notify_admins("⚠️ 用户账号监听暂时无法连接，已回退到 Bot 监听，将自动重试。")
         except Exception as exc:
@@ -2633,35 +2645,76 @@ class TelegramBot:
 
         self.register_monitor_events(self.client, fallback=True)
 
+    def _log_startup_settings(self) -> None:
+        sources = self.monitor_chat_ids
+        preview = ', '.join(map(str, sources[:8])) or '无'
+        if len(sources) > 8:
+            preview += f'，另有 {len(sources) - 8} 个'
+        logger.info('[启动/配置] 目标频道=%s；源频道 %d 个（%s）；管理员 %d 人；额外投稿名单 %d 人',
+                    self.monitor_target_channel_id() or '未设置', len(sources), preview, len(ADMIN_IDS), len(SUBMITTER_IDS))
+        logger.info('[启动/配置] MONITOR_TDL_FALLBACK：%s；状态消息自动删除：%s',
+                    '开启' if MONITOR_TDL_FALLBACK else '关闭',
+                    (f'普通 {AUTO_DELETE_STATUS_SECONDS}s / 错误 {AUTO_DELETE_ERROR_SECONDS}s / 命令 {AUTO_DELETE_COMMAND_SECONDS}s'
+                     if AUTO_DELETE_BOT_MESSAGES else '关闭'))
+        logger.info('[启动/存储] 编辑映射=%s；任务队列=%s；映射清理：%s',
+                    MONITOR_MAP_FILE, self.task_queue.journal.path,
+                    (f'每 {MONITOR_CLEANUP_INTERVAL // 86400} 天检查，保留 {MONITOR_MAP_RETENTION_DAYS} 天'
+                     if MONITOR_MAP_RETENTION_DAYS else '关闭，永久保留'))
+        path = self.tdl.tdl_path
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            logger.info('[启动/TDL] %s 存在且可执行；未检查 TDL 登录状态', path)
+        else:
+            logger.warning('[启动/TDL] %s 不存在或不可执行；请检查挂载和执行权限。需要 TDL 的任务不可用，Bot 继续启动', path)
+        if not ADMIN_IDS:
+            logger.warning('[启动/配置] ADMIN_IDS 为空；无人可使用管理面板或接收管理员通知')
+        if not self.target_chat_id:
+            logger.warning('[启动/配置] 未设置目标频道；转发前请用 /forwardto 或配置 FORWARD_TO_CHAT_ID')
+
     async def start(self) -> None:
+        started = time.monotonic()
         self._stopping = False
-        logger.info("MONITOR_TDL_FALLBACK：%s", "开启" if MONITOR_TDL_FALLBACK else "关闭")
+        self._startup_phase = '配置'
+        self._log_startup_settings()
+        self._startup_phase = 'Bot 登录'
         if not self._bot_handlers_registered:
             self._register_bot_handlers()
             self._bot_handlers_registered = True
+        logger.info('[启动/Bot 登录] 消息和按钮处理器已注册；正在连接 Telegram 并验证 Bot 身份')
         await self.client.start(bot_token=BOT_TOKEN)
+        logger.info('[启动/Bot 登录] Bot 身份验证成功')
         if MONITOR_MAP_RETENTION_DAYS and self._monitor_cleanup_task is None:
             self._monitor_cleanup_task = asyncio.create_task(self.monitor_cleanup_loop())
+        self._startup_phase = '用户监听'
         await self.start_user_monitor()
+        self._startup_phase = '队列恢复'
+        logger.info('[启动/队列] 正在恢复持久化任务')
         await self.task_queue.start()
 
+        self._startup_phase = '管理员通知'
+        notified = 0
+        if ADMIN_IDS:
+            logger.info('[启动/通知] 正在向 %d 位管理员发送启动面板', len(ADMIN_IDS))
         for admin_id in ADMIN_IDS:
             try:
                 await self.admin_panel.open(admin_id, partial(self.client.send_message, admin_id))
-                logger.info(f"已向管理员 {admin_id} 发送启动消息")
+                notified += 1
             except Exception as e:
-                logger.error(f"向管理员 {admin_id} 发送启动消息失败: {e}")
+                logger.warning('[启动/通知] 启动面板发送失败（%s）；不影响 Bot 运行', type(e).__name__)
 
-        if self.monitor_chat_ids:
-            logger.info(f"自动监听源频道已启用: {self.monitor_chat_ids}")
-            if self.is_user_monitor_active():
-                logger.info("用户账号与 Bot 同时监听源频道的新帖和编辑；相同投递按源帖和目标去重")
-            else:
-                logger.info("用户账号监听未运行，将回退到 bot；bot 需要源频道读取权限及目标频道发帖和编辑权限")
+        target = self.monitor_target_channel_id()
+        if not self.monitor_chat_ids:
+            sync = '未配置监听源'
+        elif not target:
+            sync = '等待设置目标频道'
+        elif all(source == target for source in self.monitor_chat_ids):
+            sync = '源频道与目标相同，跳过复制'
         else:
-            logger.info("自动监听源频道未配置")
+            sync = '等待源频道更新'
+        listener = 'Bot + 用户账号' if self.is_user_monitor_active() else '仅 Bot'
+        logger.info('[启动/就绪] Bot 已启动，开始接收更新；监听客户端=%s；自动同步=%s；管理员面板成功 %d/%d；启动耗时 %.2f 秒',
+                    listener, sync, notified, len(ADMIN_IDS), time.monotonic() - started)
 
-        logger.info("Bot 已启动（TDL 集成模式）")
+        self._startup_phase = None
         await self.client.run_until_disconnected()
 
     async def stop(self) -> None:
@@ -2706,7 +2759,12 @@ async def main() -> None:
                                         ("BOT_TOKEN", BOT_TOKEN.strip())) if not valid]
     if missing:
         raise SystemExit(f"请在 .env 或运行环境中配置：{', '.join(missing)}")
-    bot = TelegramBot()
+    logger.info('[启动/配置] 必填项 API_ID、API_HASH、BOT_TOKEN 已填写；尚未验证凭据')
+    try:
+        bot = TelegramBot()
+    except Exception as exc:
+        logger.error('[启动/失败] 阶段=初始化，异常=%s；请检查本地存储和客户端配置', type(exc).__name__)
+        raise SystemExit(1) from None
     loop = asyncio.get_running_loop()
     runner = asyncio.create_task(bot.start())
     terminating = False
@@ -2734,13 +2792,20 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("用户手动停止")
     except (errors.AccessTokenInvalidError, errors.AccessTokenExpiredError):
-        logger.error("机器人令牌无效或已过期，请检查 .env 中的 BOT_TOKEN 并重建容器；不要分享令牌。")
+        logger.error('[%s] 机器人令牌无效或已过期，请检查 .env 中的 BOT_TOKEN 并重建容器；不要分享令牌。',
+                     bot._startup_phase or '运行')
         raise SystemExit(2) from None
     except errors.FloodWaitError as exc:
-        logger.error("启动受到 Telegram 限流，请在 %s 秒后重试", exc.seconds)
+        logger.error('[%s] Telegram 限流，请在 %s 秒后重试', bot._startup_phase or '运行', exc.seconds)
         raise SystemExit(1) from None
-    except Exception:
-        logger.exception("机器人异常退出")
+    except Exception as exc:
+        if bot._startup_phase is not None:
+            hint = {'Bot 登录': '请检查 Telegram 网络连接和应用凭据',
+                    '队列恢复': '请检查任务队列文件及 monitor-data 卷权限和剩余空间',
+                    '用户监听': '请检查用户会话配置和网络连接'}.get(bot._startup_phase, '请检查上一条启动日志')
+            logger.error('[启动/失败] 阶段=%s，异常=%s；Bot 未就绪。%s', bot._startup_phase, type(exc).__name__, hint)
+        else:
+            logger.exception("机器人异常退出")
         raise SystemExit(1) from None
     finally:
         try:

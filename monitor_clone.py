@@ -1,7 +1,7 @@
 """TDL media download plus receipted MTProto publication (not TDL forward stdout)."""
 from pathlib import Path
 
-from telethon import functions, types, utils
+from telethon import errors, functions, types, utils
 
 
 def media_key(post):
@@ -56,11 +56,24 @@ def expected_size(post):
     return 0
 
 
-async def uploaded_media(tdl, client, target, source_id, post, directory):
+async def upload_batch(tdl, client, source_peer, target, source_id, posts, directory):
+    photos = [p for p in posts if isinstance(p.media, types.MessageMediaPhoto)]
+    if photos:
+        channel = await client.get_entity(source_peer)
+        if not isinstance(channel, types.Channel) or channel.id != source_id or channel.min:
+            raise ValueError('无法核实源频道的照片转存权限，未上传')
+        if not channel.creator and (channel.noforwards or any(getattr(p, 'noforwards', True) for p in photos)):
+            raise ValueError('源频道或照片禁止转发，当前监听账号不是源频道所有者，未上传')
+    return {p.id: await _uploaded_media(tdl, client, target, source_id, p, directory) for p in posts}
+
+
+async def _uploaded_media(tdl, client, target, source_id, post, directory):
     key = media_key(post)
     if key == 'text':
         return None
-    path = Path(directory) / f'{post.id}.bin'
+    # TDL returns a JPEG for a Telegram Photo. Telethon uses the upload basename as InputFile.name.
+    suffix = '.jpg' if isinstance(post.media, types.MessageMediaPhoto) else '.bin'
+    path = Path(directory) / f'{post.id}{suffix}'
     await tdl.download_media(f'https://t.me/c/{source_id}/{post.id}', str(path))
     size = expected_size(post)
     if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
@@ -75,7 +88,13 @@ async def uploaded_media(tdl, client, target, source_id, post, directory):
         doc = media.document
         uploaded = types.InputMediaUploadedDocument(file, doc.mime_type, doc.attributes,
                                                     spoiler=media.spoiler)
-    result = await client(functions.messages.UploadMediaRequest(target, uploaded))
+    try:
+        result = await client(functions.messages.UploadMediaRequest(target, uploaded))
+    except errors.PhotoExtInvalidError as exc:
+        raise ValueError(
+            f'源消息 {source_id}/{post.id}：Telegram 拒绝了照片文件扩展名（PHOTO_EXT_INVALID）。'
+            '本次未发布新帖，也未修改已有目标帖。'
+        ) from exc
     result = utils.get_input_media(result)
     if not isinstance(result, (types.InputMediaPhoto, types.InputMediaDocument)):
         raise ValueError(f'源消息 {post.id} 的媒体上传未返回有效引用')

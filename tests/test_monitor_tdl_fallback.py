@@ -29,6 +29,8 @@ class RestrictedCloneTests(fixtures.MonitorHarness, unittest.IsolatedAsyncioTest
     def restrict(self, *posts):
         self.posts = {p.id: p for p in posts}
         self.bot.client.get_messages.side_effect = self.read
+        self.bot.client.get_entity = AsyncMock(return_value=T.Channel(SOURCE, 'test', T.ChatPhotoEmpty(), None,
+                                                                     creator=True, noforwards=True))
         self.bot.client.forward.side_effect = self.rpc
         self.bot.client.upload_file = AsyncMock(return_value=T.InputFile(1, 1, 'file', ''))
         self.bot.tdl.forward_clone = AsyncMock()
@@ -145,6 +147,65 @@ class RestrictedCloneTests(fixtures.MonitorHarness, unittest.IsolatedAsyncioTest
             self.assertEqual((await self.process()).status, app.TaskStatus.FAILED)
         self.assertFalse(self.publications())
         self.assertEqual([self.state(i) for i in (3,7)], [app.TaskStatus.PENDING]*2)
+
+    async def test_invalid_photo_extension_reports_member_before_album_publication(self):
+        self.restrict(photo(3, 99), photo(7, 99))
+        uploads = []
+
+        async def reject_second(req):
+            if isinstance(req, F.UploadMediaRequest):
+                uploads.append(req)
+                if len(uploads) == 2:
+                    raise app.errors.PhotoExtInvalidError(req)
+            return await self.rpc(req)
+
+        self.bot.client.forward.side_effect = reject_second
+        await self.enqueue(self.event(3, 7, album=99))
+        with self.assertLogs(app.logger, 'ERROR'):
+            task = await self.process()
+        self.assertEqual(task.status, app.TaskStatus.FAILED)
+        self.assertIn(f'{SOURCE}/7', task.error_msg)
+        self.assertIn('PHOTO_EXT_INVALID', task.error_msg)
+        self.assertFalse(self.publications())
+        self.assertEqual([self.state(i) for i in (3, 7)], [app.TaskStatus.PENDING]*2)
+
+    async def test_photos_use_jpeg_upload_names_for_album_and_replacement(self):
+        self.restrict(photo(3, 99), photo(7, 99))
+        self.bot.client.upload_file.side_effect = lambda path: T.InputFile(1, 1, Path(path).name, '')
+        await self.enqueue(self.event(3, 7, album=99))
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        self.bot.client.get_entity.assert_awaited_once()
+        self.posts[7] = photo(7, 99, media_id=70)
+        await self.enqueue(self.event(7), edited=True)
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        self.assertEqual([c.args[0].media.file.name for c in self.bot.client.forward.await_args_list
+                          if isinstance(c.args[0], F.UploadMediaRequest)], ['3.jpg', '7.jpg', '7.jpg'])
+        self.assertEqual(len(self.publications()), 1)
+
+    async def test_protected_photos_not_uploaded_by_non_owner(self):
+        self.restrict(photo(5))
+        self.bot.client.get_entity.return_value.creator = False
+        await self.enqueue(self.event(5))
+        with self.assertLogs(app.logger, 'ERROR'):
+            self.assertEqual((await self.process()).status, app.TaskStatus.FAILED)
+        self.bot.tdl.download_media.assert_not_awaited()
+        self.assertFalse(self.publications())
+
+    async def test_invalid_replacement_leaves_existing_post_and_mapping_intact(self):
+        self.restrict(photo(5))
+        await self.enqueue(self.event(5)); await self.process()
+        mapping = self.bot.monitor_message_map()
+        old_key = mapping.cloned_media_key(SOURCE, 5, TARGET)
+        self.posts[5] = photo(5, media_id=55)
+        self.bot.client.forward.side_effect = app.errors.PhotoExtInvalidError(None)
+        await self.enqueue(self.event(5), edited=True)
+        with self.assertLogs(app.logger, 'ERROR'):
+            task = await self.process()
+        self.assertEqual(task.status, app.TaskStatus.FAILED)
+        self.assertIn('未修改已有目标帖', task.error_msg)
+        self.bot.client.edit_message.assert_not_awaited()
+        self.assertEqual(mapping.get(SOURCE, 5, TARGET), 515)
+        self.assertEqual(mapping.cloned_media_key(SOURCE, 5, TARGET), old_key)
 
     async def test_missing_member_is_not_dropped(self):
         self.restrict(photo(3, 99))
@@ -269,6 +330,7 @@ class RestrictedCloneTests(fixtures.MonitorHarness, unittest.IsolatedAsyncioTest
         self.restrict(photo(5))
         user = self.bot.user_client = fixtures.FakeClient()
         user.get_messages.side_effect = self.read
+        user.get_entity = self.bot.client.get_entity
         user.forward.side_effect = self.rpc
         user.upload_file = AsyncMock(return_value=T.InputFile(1, 1, 'file', ''))
         self.bot.user_monitor_running = True
