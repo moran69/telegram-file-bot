@@ -1786,9 +1786,15 @@ class TelegramBot:
                 await respond("⏹️ 服务正在停止，未加入同步队列")
             elif mapped is None:
                 await respond("ℹ️ 当前目标没有转发映射，未修改或补发任何消息")
+            elif await self.task_queue.enqueue_edit(event, source_id, mid, target_id) is None:
+                await respond("⏹️ 服务正在停止，未加入同步队列")
             else:
-                await self.task_queue.enqueue_edit(event, source_id, mid, target_id)
-                await respond(f"⏳ 已加入原地同步队列：{source_id}/{mid} → {target_id}/{mapped}")
+                await respond(
+                    f"⏳ 已加入原地同步队列：{source_id}/{mid}\n"
+                    f"🔗 查看目标帖： https://t.me/c/{target_id}/{mapped}\n"
+                    "此回执表示已受理，不代表同步完成。",
+                    link_preview=False,
+                )
             return True
 
         if command == '/showto':

@@ -127,6 +127,13 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stale.answer.await_args.kwargs['alert'])
         self.client.edit_message.assert_not_awaited()
 
+    def assert_sync_receipt(self, event, expected):
+        event.respond.assert_awaited_once()
+        call = event.respond.await_args
+        self.assertEqual(call.kwargs['reply_to'], event.message.id)
+        self.assertIn(expected, call.args[0])
+        self.assertEqual(call.args[0], self.page.raw_text)
+
     async def test_sync_is_reply_only_and_mapped_edit_only(self):
         self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 91})
         link = f'https://t.me/c/{SOURCE}/7'
@@ -135,8 +142,8 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.messages[prompt].buttons, types.ReplyKeyboardForceReply)
         await self.text(link)
         self.bot.do_forward.assert_awaited_once()
-        await self.reply(link)
-        self.assertIn('已加入原地同步队列', self.page.raw_text)
+        self.assert_sync_receipt(await self.reply(link), '已加入原地同步队列')
+        self.assertIn(f'https://t.me/c/{TARGET}/91', self.page.raw_text.split())
         q = self.bot.task_queue.queue
         self.assertEqual(q.qsize(), 1)
         task = q.get_nowait(); q.task_done()
@@ -146,9 +153,62 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(q.empty())
         self.bot.do_forward.assert_awaited_once()
         await self.click('⬅️ 返回面板'); await self.click('🔄 手动同步')
-        await self.reply(f'https://t.me/c/{SOURCE}/8')
-        self.assertIn('没有转发映射', self.page.raw_text)
+        self.assert_sync_receipt(await self.reply(f'https://t.me/c/{SOURCE}/8'), '没有转发映射')
+        self.assertNotIn('https://t.me/', self.page.raw_text)
         self.assertTrue(q.empty())
+
+    async def test_sync_input_rejections_reply_to_the_submitted_message(self):
+        link = f'https://t.me/c/{SOURCE}/7'
+        for value, expected in [('不是链接', '链接无效'), ('取消', '已取消'), (link, '已改变'),
+                                (link, '已过期'), (link, '不要转发消息')]:
+            with self.subTest(expected=expected):
+                await self.text('/start'); await self.click('🔄 手动同步')
+                if expected == '已改变':
+                    self.bot.target_chat_id += 1
+                elif expected == '已过期':
+                    self.session.expires = 1
+                ev = await self.text(value, reply=self.session.prompt_id, forwarded=expected == '不要转发消息')
+                self.assert_sync_receipt(ev, expected)
+                self.assertTrue(self.bot.task_queue.queue.empty())
+                self.bot.do_forward.assert_not_awaited()
+
+    async def test_sync_receipt_uses_queue_admission_result(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 91})
+        for position, expected in [(None, '未加入同步队列'), (0, '已加入原地同步队列')]:
+            with self.subTest(position=position), patch.object(self.bot.task_queue, 'enqueue_edit',
+                                                                new=AsyncMock(return_value=position)) as enqueue:
+                await self.text('/start'); await self.click('🔄 手动同步')
+                self.assert_sync_receipt(await self.reply(f'https://t.me/c/{SOURCE}/7'), expected)
+                enqueue.assert_awaited_once()
+
+    async def test_sync_panel_edit_failure_keeps_receipt_and_does_not_replay(self):
+        link = f'https://t.me/c/{SOURCE}/7'
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 91})
+        await self.click('🔄 手动同步')
+        prompt = self.session.prompt_id
+        self.client.edit_message.side_effect = ConnectionError('old panel deleted')
+        with self.assertLogs('admin_panel', 'ERROR'):
+            ev = await self.text(link, reply=prompt)
+        ev.respond.assert_awaited_once()
+        self.assertIn('已加入原地同步队列', ev.respond.await_args.args[0])
+        self.assertEqual(ev.respond.await_args.kwargs['reply_to'], ev.message.id)
+        self.assertNotIn(UID, self.bot.admin_panel.sessions)
+        with patch.object(self.bot.task_queue, 'enqueue_edit', new_callable=AsyncMock) as enqueue:
+            stale = await self.text(link, reply=prompt)
+            self.assertIn('已失效', stale.respond.await_args.args[0])
+            enqueue.assert_not_awaited()
+        self.assertEqual(self.bot.task_queue.queue.qsize(), 1)
+        self.bot.do_forward.assert_not_awaited()
+
+    async def test_sync_receipt_send_failure_falls_back_to_panel(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 91})
+        await self.click('🔄 手动同步')
+        with patch.object(self, 'send', side_effect=ConnectionError('receipt failed')), self.assertLogs('admin_panel', 'WARNING'):
+            ev = await self.reply(f'https://t.me/c/{SOURCE}/7')
+        ev.respond.assert_awaited_once()
+        self.assertIn('已加入原地同步队列', self.page.raw_text)
+        self.assertEqual(self.bot.task_queue.queue.qsize(), 1)
+        self.assertFalse(self.session.prompt_id)
 
     async def test_old_prompt_never_becomes_submission_and_plain_reply_is_preserved(self):
         link = f'https://t.me/c/{SOURCE}/23'

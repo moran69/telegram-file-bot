@@ -4,6 +4,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
+from functools import partial
 
 from telethon import Button, types
 
@@ -25,7 +26,7 @@ PAGES = {
     'history': ('/flog', [[('🗑 清空本地记录…', 'ask:logclear')]]),
 }
 QUESTIONS = {
-    'sync': '请回复一条源频道原帖链接。只更新已映射的目标帖，不另发。',
+    'sync': '请回复这条提示，粘贴源频道原帖链接（如 https://t.me/c/1234567890/42）。机器人会回复是否已入队；只更新已映射的目标帖，不另发。',
     'export': '第 1 步：请回复起始原帖的 t.me/c 消息链接。',
     'end': '第 2 步：请回复同一源频道的结束原帖链接。',
     'target': '请回复新目标的频道裸 ID 或 Telegram 标记后的频道 ID。',
@@ -124,7 +125,7 @@ class AdminPanel:
                 if s.expires and time.monotonic() >= s.expires and action != 'home':
                     await self._result(s, '⌛ 操作已过期，未执行。')
                 elif action == 'confirm':
-                    await self._execute(s, event, s.command, s.guard)
+                    await self._execute(s, event, s.command, s.guard, partial(self._result, s))
                 else:
                     s.command, s.stage, s.expires = (), '', 0
                     await self._navigate(s, event, action)
@@ -219,18 +220,19 @@ class AdminPanel:
             if not self.allowed(uid):
                 return True
             if not s or s.prompt_id != reply_id:
-                await event.respond('此输入提示已失效，未执行或投稿。请使用最新面板。')
+                await event.respond('此输入提示已失效，未执行或投稿。请使用最新面板。', reply_to=event.message.id)
                 return True
             s.prompt_id = 0  # a second reply cannot consume the same prompt
-            if time.monotonic() >= s.expires:
-                await self._result(s, '⌛ 输入已过期，未执行或投稿。')
-            elif event.message.forward or (event.message.media and not isinstance(event.message.media, types.MessageMediaWebPage)):
-                await self._result(s, '请回复纯文本或原帖链接，不要转发消息。未执行或投稿。')
-            else:
-                try:
-                    await self._submit(s, event, (event.raw_text or '').strip())
-                except Exception:
-                    await self._unavailable(s)
+            result = partial(self._sync_result, s, event) if s.stage == 'sync' else partial(self._result, s)
+            try:
+                if time.monotonic() >= s.expires:
+                    await result('⌛ 输入已过期，未执行或投稿。')
+                elif event.message.forward or (event.message.media and not isinstance(event.message.media, types.MessageMediaWebPage)):
+                    await result('请回复纯文本或原帖链接，不要转发消息。未执行或投稿。')
+                else:
+                    await self._submit(s, event, (event.raw_text or '').strip(), result)
+            except Exception:
+                await self._unavailable(s)
             return True
 
     def _is_post(self, value):
@@ -239,16 +241,19 @@ class AdminPanel:
         src, mid = self.post_link(value)
         return src is not None and self.source_id(str(src)) is not None and mid is not None and 0 < mid < 2**31
 
-    async def _submit(self, s, event, value):
+    async def _submit(self, s, event, value, result):
         stage = s.stage
         if value == '取消':
-            await self._result(s, '已取消。')
+            await result('已取消。')
             return
         if stage in ('sync', 'export', 'end') and self.bot.target_chat_id != s.guard:
-            await self._result(s, '目标频道已改变，请重新开始。')
+            await result('目标频道已改变，请重新开始。')
             return
-        if stage == 'sync' and self._is_post(value):
-            await self._execute(s, event, ('/resync', value), s.guard)
+        if stage == 'sync':
+            if self._is_post(value):
+                await self._execute(s, event, ('/resync', value), s.guard, result)
+            else:
+                await result('❌ 链接无效，未加入同步队列。请重新点「手动同步」，回复源频道原帖链接，如 https://t.me/c/1234567890/42。')
         elif stage in ('export', 'end') and self._is_post(value):
             if stage == 'export':
                 s.start_link = value
@@ -259,19 +264,19 @@ class AdminPanel:
                 if not error:
                     await self._confirm(s, cmd, f'源频道：{src}\n目标频道：{s.guard}\n消息 ID 范围：{first} 至 {last}')
                 else:
-                    await self._result(s, '❌ 起止链接必须是同一频道的有效原帖，并按 ID 升序填写。未入队。')
+                    await result('❌ 起止链接必须是同一频道的有效原帖，并按 ID 升序填写。未入队。')
         elif stage == 'target' and (cid := self.target_id(value)) is not None:
             await self._confirm(s, ('/forwardto', str(cid)), f'更换目标频道：{self.bot.target_chat_id} → {cid}')
         elif stage == 'add' and (cid := self.source_id(value)) is not None:
-            await self._execute(s, event, ('/monitor', 'add', str(cid)), self._snapshot(('/monitor',)))
+            await self._execute(s, event, ('/monitor', 'add', str(cid)), self._snapshot(('/monitor',)), result)
         elif stage == 'set' and (ids := self.source_list(value)):
             listing = ', '.join(map(str, ids))
             if len(listing) > 3200:
-                await self._result(s, '列表太长，无法完整预览。请分批添加，或使用 /monitor set。')
+                await result('列表太长，无法完整预览。请分批添加，或使用 /monitor set。')
             else:
                 await self._confirm(s, ('/monitor', 'set', ','.join(map(str, ids))), f'替换整个监听列表，新列表：\n{listing}')
         else:
-            await self._result(s, '❌ 输入无效，未执行或投稿。请从面板重新开始。')
+            await result('❌ 输入无效，未执行或投稿。请从面板重新开始。')
 
     async def _confirm(self, s, cmd, detail):
         s.command, s.guard, s.expires = cmd, self._snapshot(cmd), time.monotonic() + TTL
@@ -282,10 +287,23 @@ class AdminPanel:
         s.command, s.stage, s.prompt_id, s.expires = (), '', 0, 0
         await self._screen(s, text, [BACK])
 
-    async def _execute(self, s, event, cmd, guard):
+    async def _sync_result(self, s, event, text, *, link_preview=False):
+        # Deliver the admission decision next to the submitted link, independently of the old panel.
+        try:
+            await event.respond(text, reply_to=event.message.id, parse_mode=None, link_preview=link_preview)
+        except Exception:
+            logger.warning('手动同步回执发送失败，尝试更新原面板', exc_info=True)
+            await self._result(s, text)
+            return
+        try:
+            await self._result(s, text)
+        except Exception:
+            self.sessions.pop(s.owner, None)
+            logger.exception('手动同步回执已发送，但面板更新失败')
+
+    async def _execute(self, s, event, cmd, guard, result):
         if not cmd or not self.allowed(s.owner) or self._snapshot(cmd) != guard:
-            await self._result(s, '配置已改变或操作已失效。未执行，请重新开始。')
+            await result('配置已改变或操作已失效。未执行，请重新开始。')
             return
         s.command, s.prompt_id, s.expires = (), 0, 0
-        await self.bot.run_admin_action(event, list(cmd), lambda text, **kw: self._result(s, text, **kw),
-                                        panel_feedback=True)
+        await self.bot.run_admin_action(event, list(cmd), result, panel_feedback=True)

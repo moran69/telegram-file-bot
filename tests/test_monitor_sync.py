@@ -1685,6 +1685,8 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
                     event.message.text = text
                     self.assertTrue(await self.bot.handle_admin_command(event))
                     self.assertIn('已加入', event.respond.await_args.args[0])
+                    self.assertIn(f'https://t.me/c/{TARGET}/456', event.respond.await_args.args[0].split())
+                    self.assertFalse(event.respond.await_args.kwargs['link_preview'])
                     self.assertEqual((await self.process()).mode, 'monitor_edit')
                     self.assertEqual(self.bot.client.edit_message.await_args.args[1], 456)
         self.bot.client.forward.assert_not_awaited()
