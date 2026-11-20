@@ -1325,6 +1325,7 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
             for text, expected in (('/start hello', '管理面板'), ('/start@EXAMPLE_bot hello', '管理面板'),
                                    ('/queue@example_bot', '转发队列为空'), ('/starter', None),
                                    ('/start@Other_bot', None), ('/unknown https://t.me/x/10', None),
+                                   (f'/resyn https://t.me/c/{SOURCE}/7', None),
                                    ('/forwardto@Other_bot https://t.me/x/10', None)):
                 with self.subTest(text=text):
                     event.message.text, event.respond = text, AsyncMock(return_value=None)
@@ -1655,6 +1656,41 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
                 await stop()
                 await asyncio.sleep(0.01)
                 self.assertEqual(self.bot.task_queue.get_queue_status()['queue_size'], 0)
+
+    async def test_resync_with_post_link_edits_exact_mapping(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 456})
+        event = self.event(11, post=False)
+        event.chat_id = event.sender_id = 98
+        event.respond = AsyncMock(return_value=None)
+        link = f'https://t.me/c/{SOURCE}/7'
+        with patch.object(app, 'ADMIN_IDS', [98]):
+            for text in (f'/resync {link}', f'/resync {link}?single'):
+                with self.subTest(text=text):
+                    event.message.text = text
+                    self.assertTrue(await self.bot.handle_admin_command(event))
+                    self.assertIn('已加入', event.respond.await_args.args[0])
+                    self.assertEqual((await self.process()).mode, 'monitor_edit')
+                    self.assertEqual(self.bot.client.edit_message.await_args.args[1], 456)
+        self.bot.client.forward.assert_not_awaited()
+
+    async def test_resync_rejects_ambiguous_links_without_queueing(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 456})
+        event = self.event(11, post=False)
+        event.chat_id = event.sender_id = 98
+        event.respond = AsyncMock(return_value=None)
+        base = f'https://t.me/c/{SOURCE}'
+        with patch.object(app, 'ADMIN_IDS', [98]):
+            for arg in (base, f'{base}/7?comment=3', f'{base}/7?single&%74hread=8', f'{base}/7/3',
+                        f'{base}/0', f'{base}/2147483648', f'{base}/7 other', 'https://example.com/c/1/7'):
+                with self.subTest(arg=arg):
+                    event.message.text = '/resync ' + arg
+                    self.assertTrue(await self.bot.handle_admin_command(event))
+                    self.assertIn('用法', event.respond.await_args.args[0])
+                    self.assertTrue(self.bot.task_queue.queue.empty())
+            event.message.text = f'/resync {base}/8'
+            await self.bot.handle_admin_command(event)
+            self.assertIn('没有转发映射', event.respond.await_args.args[0])
+            self.assertTrue(self.bot.task_queue.queue.empty())
 
     async def test_delivery_resync_from_admin_chat_only_uses_exact_existing_mapping(self):
         self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 456})

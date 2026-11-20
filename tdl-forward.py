@@ -508,7 +508,7 @@ START_MESSAGE_ADMIN = (
     '  覆盖自动监听源频道列表\n'
     '/monitor clear\n'
     '  清空自动监听源频道列表\n\n'
-    '/resync <源频道裸ID> <源消息ID>\n'
+    '/resync <源频道消息链接> 或 /resync <源频道裸ID> <源消息ID>\n'
     '  补同步一条已映射消息的最新内容，不补发新帖\n\n'
     '/tdlstop\n'
     '  停止当前手动 TDL 任务，清空当时的等待队列和定时重试；不强停在途自动同步\n\n'
@@ -1730,10 +1730,15 @@ class TelegramBot:
             return True
 
         if command == '/resync':
-            source_id = parse_monitor_chat_id(parts[1]) if len(parts) == 3 else None
-            mid = int(parts[2]) if len(parts) == 3 and re.fullmatch(r'[0-9]{1,10}', parts[2]) else 0
-            if source_id is None or not 1 <= mid < 2**31:
-                await respond("❌ 用法：/resync <源频道裸ID> <源消息ID>")
+            source_id = mid = None
+            if len(parts) == 2:
+                source_id, mid = parse_private_channel_link(parts[1])
+            elif len(parts) == 3:
+                source_id = parse_monitor_chat_id(parts[1])
+                mid = int(parts[2]) if re.fullmatch(r'[0-9]{1,10}', parts[2]) else None
+            if not source_id or source_id > MAX_CHANNEL_ID or mid is None or not 1 <= mid < 2**31:
+                await respond("❌ 用法：/resync https://t.me/c/1234567890/42\n"
+                              "或 /resync <源频道裸ID> <源消息ID>。请使用源频道原帖链接，不要使用评论或话题链接。")
                 return True
             target_id = self.monitor_target_channel_id()
             if not self.has_monitor_chat_id(source_id) or not target_id or target_id == source_id:
