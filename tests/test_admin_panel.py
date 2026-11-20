@@ -69,7 +69,9 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
 
     async def click(self, label):
         ev = await self.hit(self.button(label))
-        ev.answer.assert_awaited_once_with()
+        ev.answer.assert_awaited_once()
+        self.assertFalse(ev.answer.await_args.kwargs.get('alert'))
+        return ev
 
     async def text(self, value, *, reply=None, uid=UID, chat=UID, forwarded=False):
         msg = NS(id=next(self.message_ids), text=value, raw_text=value, forward=forwarded, grouped_id=None,
@@ -87,7 +89,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_ack_failure_revokes_prompt_before_network_io(self):
         await self.click('🔄 手动同步')
         prompt = self.session.prompt_id
-        async def broken_ack():
+        async def broken_ack(*args):
             self.assertEqual(self.session.prompt_id, 0)
             raise ConnectionError('ack failed')
         ev = NS(data=self.button('取消并返回'), sender_id=UID, chat_id=UID, message_id=self.session.mid,
@@ -143,7 +145,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stale.answer.await_args.kwargs['alert'])
         self.client.edit_message.assert_not_awaited()
 
-    def assert_sync_receipt(self, event, expected):
+    def assert_input_receipt(self, event, expected):
         event.respond.assert_awaited_once()
         call = event.respond.await_args
         self.assertEqual(call.kwargs['reply_to'], event.message.id)
@@ -158,7 +160,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.messages[prompt].buttons, types.ReplyKeyboardForceReply)
         await self.text(link)
         self.bot.do_forward.assert_awaited_once()
-        self.assert_sync_receipt(await self.reply(link), '已加入原地同步队列')
+        self.assert_input_receipt(await self.reply(link), '已加入原地同步队列')
         self.assertIn(f'https://t.me/c/{TARGET}/91', self.page.raw_text.split())
         q = self.bot.task_queue.queue
         self.assertEqual(q.qsize(), 1)
@@ -169,7 +171,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(q.empty())
         self.bot.do_forward.assert_awaited_once()
         await self.click('⬅️ 返回面板'); await self.click('🔄 手动同步')
-        self.assert_sync_receipt(await self.reply(f'https://t.me/c/{SOURCE}/8'), '没有转发映射')
+        self.assert_input_receipt(await self.reply(f'https://t.me/c/{SOURCE}/8'), '没有转发映射')
         self.assertNotIn('https://t.me/', self.page.raw_text)
         self.assertTrue(q.empty())
 
@@ -184,7 +186,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
                 elif expected == '已过期':
                     self.session.expires = 1
                 ev = await self.text(value, reply=self.session.prompt_id, forwarded=expected == '不要转发消息')
-                self.assert_sync_receipt(ev, expected)
+                self.assert_input_receipt(ev, expected)
                 self.assertTrue(self.bot.task_queue.queue.empty())
                 self.bot.do_forward.assert_not_awaited()
 
@@ -194,7 +196,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(position=position), patch.object(self.bot.task_queue, 'enqueue_edit',
                                                                 new=AsyncMock(return_value=position)) as enqueue:
                 await self.text('/start'); await self.click('🔄 手动同步')
-                self.assert_sync_receipt(await self.reply(f'https://t.me/c/{SOURCE}/7'), expected)
+                self.assert_input_receipt(await self.reply(f'https://t.me/c/{SOURCE}/7'), expected)
                 enqueue.assert_awaited_once()
 
     async def test_sync_panel_edit_failure_keeps_receipt_and_does_not_replay(self):
@@ -252,8 +254,13 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         self.bot.do_forward.assert_awaited_once()
 
     async def test_export_preview_and_concurrent_confirmation_admit_once(self):
-        await self.click('📦 批量转发'); await self.reply(f'https://t.me/c/{SOURCE}/100')
-        await self.reply(f'https://t.me/c/{SOURCE}/110')
+        await self.click('📦 批量转发')
+        first = await self.reply(f'https://t.me/c/{SOURCE}/100')
+        first.respond.assert_not_awaited()  # the second ForceReply prompt is already the receipt
+        self.assertEqual(self.client.send_message.await_args.kwargs['reply_to'], first.message.id)
+        self.assertIn('尚未入队', self.messages[self.session.prompt_id].raw_text)
+        last = await self.reply(f'https://t.me/c/{SOURCE}/110')
+        self.assert_input_receipt(last, '待确认')
         for detail in (str(SOURCE), str(TARGET), '100 至 110'):
             self.assertIn(detail, self.page.raw_text)
         self.assertTrue(self.bot.task_queue.queue.empty())
@@ -283,20 +290,31 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
                 self.bot.do_forward.assert_not_awaited()
 
     async def test_target_and_monitor_changes_preview_and_share_command_state(self):
-        await self.click('🎯 目标频道'); await self.click('✏️ 更换目标'); await self.reply(str(TARGET+1))
-        self.assertIn(f'{TARGET} → {TARGET+1}', self.page.raw_text)
+        await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+        mid, old = self.session.mid, self.button('取消并返回')
+        preview = await self.reply(str(TARGET+1))
+        self.assert_input_receipt(preview, f'{TARGET} → {TARGET+1}')
+        self.assertNotEqual(mid, self.session.mid)
+        self.assertIsNone(self.messages[mid].buttons)
+        self.assertTrue((await self.hit(old, mid=mid)).answer.await_args.kwargs['alert'])
         self.assertEqual(self.bot.target_chat_id, TARGET)
-        await self.click('确认执行'); self.assertEqual(self.bot.target_chat_id, TARGET+1)
+        clicked = await self.click('确认执行')
+        self.assertIn('已收到确认', clicked.answer.await_args.args[0])
+        self.assertIn('目标频道已更新', self.page.raw_text)
+        self.assertEqual(self.bot.target_chat_id, TARGET+1)
         await self.click('⬅️ 返回面板'); await self.click('📡 监听频道'); await self.click('➕ 添加')
-        await self.reply('12345'); self.assertIn(12345, self.bot.monitor_chat_ids)
+        self.assert_input_receipt(await self.reply('12345'), '已添加自动监听源频道：12345')
+        self.assertIn(12345, self.bot.monitor_chat_ids)
         await self.click('⬅️ 返回面板'); await self.click('📡 监听频道'); await self.click('替换整个列表')
-        await self.reply('123，456,123'); self.assertIn('123, 456', self.page.raw_text)
+        self.assert_input_receipt(await self.reply('123，456,123'), '123, 456')
         self.assertNotIn(456, self.bot.monitor_chat_ids)
         await self.click('确认执行'); self.assertEqual(self.bot.monitor_chat_ids, [123,456])
         await self.click('⬅️ 返回面板'); await self.click('📡 监听频道'); await self.click('➖ 点选移除')
         await self.click('123'); await self.click('确认执行'); self.assertEqual(self.bot.monitor_chat_ids, [456])
         await self.click('⬅️ 返回面板'); await self.click('📡 监听频道'); await self.click('清空监听…')
-        await self.click('取消'); self.assertEqual(self.bot.monitor_chat_ids, [456])
+        cancelled = await self.click('取消')
+        self.assertIn('已取消', cancelled.answer.await_args.args[0])
+        self.assertEqual(self.bot.monitor_chat_ids, [456])
         await self.click('📡 监听频道'); await self.click('清空监听…'); await self.click('确认执行')
         self.assertEqual(self.bot.monitor_chat_ids, [])
 
@@ -358,9 +376,60 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         await self.click('📝 转发记录'); await self.click('🗑 清空本地记录…')
         key, mid = self.button('确认执行'), self.session.mid
         self.client.edit_message.side_effect = ConnectionError('screen update failed')
+        self.client.send_message.side_effect = ConnectionError('cannot deliver replacement')
         with self.assertLogs('admin_panel', 'ERROR'):
             await self.hit(key, mid=mid)
         self.assertNotIn(UID, self.bot.admin_panel.sessions)
         await self.hit(key, mid=mid)
         self.bot.forward_log.clear.assert_called_once()
         self.assertIn('核对当前状态', self.client.send_message.await_args.args[1])
+
+    async def test_monitor_input_rejections_report_the_outcome_at_the_reply(self):
+        for value, expected in [('not-an-id', '输入无效'), ('取消', '已取消'), ('123', '输入已过期')]:
+            with self.subTest(expected=expected):
+                await self.text('/start'); await self.click('📡 监听频道'); await self.click('➕ 添加')
+                prompt = self.session.prompt_id
+                if expected == '输入已过期':
+                    self.session.expires = 1
+                self.assert_input_receipt(await self.reply(value), expected)
+                stale = await self.text('123', reply=prompt)
+                self.assertIn('已失效', stale.respond.await_args.args[0])
+                self.assertEqual(self.bot.monitor_chat_ids, [SOURCE])
+                self.bot.do_forward.assert_not_awaited()
+
+    async def test_confirmation_send_failure_keeps_original_panel_actionable(self):
+        await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+        old_mid = self.session.mid
+        with patch.object(self, 'send', side_effect=ConnectionError('receipt failed')), self.assertLogs('admin_panel', 'WARNING'):
+            await self.reply(str(TARGET+1))
+        self.assertEqual(self.session.mid, old_mid)
+        self.assertIn('尚未执行', self.page.raw_text)
+        self.assertEqual(self.bot.target_chat_id, TARGET)
+        await self.click('确认执行')
+        self.assertEqual(self.bot.target_chat_id, TARGET+1)
+
+    async def test_missing_confirmation_card_replies_with_actual_result_without_replay(self):
+        self.bot.forward_log.get_all.return_value = []
+        await self.click('📝 转发记录'); await self.click('🗑 清空本地记录…')
+        old_mid, key = self.session.mid, self.button('确认执行')
+        self.client.edit_message.side_effect = ConnectionError('card gone')
+        with self.assertLogs('admin_panel', 'WARNING'):
+            await self.hit(key)
+        self.assertNotEqual(self.session.mid, old_mid)
+        self.assertIn('已清除所有转发记录', self.page.raw_text)
+        self.assertTrue(self.button('⬅️ 返回面板'))
+        self.assertTrue((await self.hit(key, mid=old_mid)).answer.await_args.kwargs['alert'])
+        self.bot.forward_log.clear.assert_called_once()
+
+    async def test_standalone_id_gets_guidance_without_consuming_prompt_or_rerouting_posts(self):
+        (await self.text('12345')).respond.assert_not_awaited()
+        await self.click('📡 监听频道'); await self.click('➕ 添加')
+        prompt = self.session.prompt_id
+        ev = await self.text('12345')
+        self.assertIn('没有回复到输入提示', ev.respond.await_args.args[0])
+        self.assertEqual(ev.respond.await_args.kwargs['reply_to'], ev.message.id)
+        self.assertEqual(self.session.prompt_id, prompt)
+        self.assertNotIn(12345, self.bot.monitor_chat_ids)
+        await self.text(f'https://t.me/c/{SOURCE}/8')
+        self.bot.do_forward.assert_awaited_once()
+        self.assert_input_receipt(await self.reply('12345'), '已添加')

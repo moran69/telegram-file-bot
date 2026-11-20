@@ -2639,6 +2639,8 @@ class TelegramBot:
                     return
                 if event.message.forward or TELEGRAM_LINK_PATTERN.search(text):
                     await self.do_forward(event)
+                elif text.strip():
+                    await self.admin_panel.remind_if_waiting(event)
 
             except Exception as e:
                 logger.error(f"消息处理异常: {e}", exc_info=True)
