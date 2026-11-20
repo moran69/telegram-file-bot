@@ -143,6 +143,10 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
         client.send_message.assert_not_awaited()
         await self.enqueue(event)
         await self.process()
+        await self.process()  # The previously unmapped edit now has an exact receipt.
+        client.edit_message.assert_awaited_once()
+        self.assertEqual(client.edit_message.await_args.args[:2], (types.InputPeerChannel(TARGET, 10), 727))
+        client.edit_message.reset_mock()
         self.bot.target_chat_id = TARGET + 1
         await self.enqueue(event, edited=True)
         await self.process()
@@ -1571,6 +1575,156 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.stop()
             self.assertIsNone(self.bot._user_monitor_watch)
             user.connect.assert_awaited_once()
+
+    async def test_delivery_grouped_new_messages_survive_without_album_event(self):
+        self.bot.task_queue.start = AsyncMock()
+        await self.bot.start()
+        handler = self.bot.client.handlers[events.NewMessage]
+        with patch.object(app, 'MONITOR_ALBUM_WAIT', 0, create=True):
+            for mid in (8, 6, 8):
+                await handler(self.event(mid, album=35))
+            await asyncio.sleep(0.01)
+        self.assertEqual(self.bot.task_queue.queue.qsize(), 1)
+        await self.process()
+        self.assertEqual(self.bot.client.forward.await_args.args[0].id, [6, 8])
+        await self.bot.client.handlers[events.Album](self.event(6, 8, 11, album=35))
+        await self.process()
+        self.assertEqual(self.bot.client.forward.await_args.args[0].id, [11])
+        for mid in (6, 8, 11):
+            self.assertEqual(self.bot.monitor_message_map().get(SOURCE, mid, TARGET), 700 + 3 * mid)
+
+    async def test_delivery_early_edit_only_reconciles_confirmed_album_members(self):
+        client = self.bot.client
+        for mid in (6, 7):
+            await self.enqueue(self.event(mid, album=35), edited=True)
+            await self.process()
+        client.forward.assert_not_awaited()
+        client.edit_message.assert_not_awaited()
+        client.forward.side_effect = lambda req: NS(updates=[types.UpdateMessageID(id=96, random_id=req.random_id[0])])
+        await self.enqueue(self.event(6, 7, album=35))
+        self.assertEqual((await self.process()).status, app.TaskStatus.UNCONFIRMED)
+        self.assertEqual(self.bot.task_queue.queue.qsize(), 1)
+        client.get_messages.side_effect = [NS(media=photo(24), raw_text='fresh caption', entities=[]), NS(media=photo(24))]
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        client.edit_message.assert_awaited_once_with(types.InputPeerChannel(TARGET, 10), 96, text='fresh caption',
+                                                     formatting_entities=[], parse_mode=None, link_preview=False, file=None)
+        client.forward.assert_awaited_once()
+        self.assertTrue(self.bot.task_queue.queue.empty())
+
+    async def test_delivery_edited_snapshot_replayed_as_new_repairs_existing_mapping(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {8: 451})
+        event = self.event(8)
+        event.message.edit_date = 123456
+        await self.enqueue(event)
+        while not self.bot.task_queue.queue.empty():
+            await self.process()
+        self.bot.client.forward.assert_not_awaited()
+        self.bot.client.edit_message.assert_awaited_once()
+        self.assertEqual(self.bot.client.edit_message.await_args.args[1], 451)
+
+    async def test_delivery_missing_event_peer_resolves_source_before_rpc(self):
+        event = self.event(9)
+        event.get_input_chat.return_value = None
+        await self.enqueue(event)
+        await self.process()
+        self.assertEqual(self.bot.client.forward.await_args.args[0].from_peer, types.InputPeerChannel(SOURCE, 10))
+        await self.enqueue(event, edited=True)
+        await self.process()
+        self.bot.client.get_messages.assert_awaited_once_with(types.InputPeerChannel(SOURCE, 10), ids=9)
+
+    async def test_delivery_user_singleton_album_targets_and_stop_barrier(self):
+        user = FakeClient()
+        user.connect, user.get_me = AsyncMock(), AsyncMock(return_value=NS(id=8))
+        user.disconnected = asyncio.get_running_loop().create_future()
+        with patch.object(app, 'USER_MONITOR_ENABLED', True), patch.object(app, 'USER_SESSION_STRING', ''), \
+                patch.object(app, 'USER_SESSION_FILE', 'mock'), patch.object(app, 'TelegramClient', return_value=user), \
+                patch.object(app, 'MONITOR_ALBUM_WAIT', 0):
+            await self.bot.start_user_monitor()
+            for mid, target in ((10, TARGET), (12, TARGET + 1)):
+                self.bot.target_chat_id = target
+                ev = self.event(mid, album=41)
+                ev.client = user
+                await user.handlers[events.NewMessage](ev)
+            await asyncio.sleep(0.01)
+            for expected in (TARGET, TARGET + 1):
+                self.assertEqual((await self.process()).target_chat_id, expected)
+            self.assertEqual([c.args[0].id for c in user.forward.await_args_list], [[10], [12]])
+            for stop in (self.bot.task_queue.stop_tdl_tasks, self.bot.stop):
+                await user.handlers[events.NewMessage](ev)
+                self.assertEqual(self.bot.task_queue.get_queue_status()['queue_size'], 1)
+                await stop()
+                await asyncio.sleep(0.01)
+                self.assertEqual(self.bot.task_queue.get_queue_status()['queue_size'], 0)
+
+    async def test_delivery_resync_from_admin_chat_only_uses_exact_existing_mapping(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 456})
+        event = self.event(11, post=False)
+        event.chat_id = event.sender_id = 98
+        event.respond = AsyncMock(return_value=None)
+        event.get_input_chat.side_effect = AssertionError('never fetch from admin chat')
+        event.message.text = f'/resync {SOURCE} 7'
+        self.assertFalse(await self.bot.handle_admin_command(event))
+        with patch.object(app, 'ADMIN_IDS', [98]):
+            for args in (f'{SOURCE} 0', f'{SOURCE} 2147483648', f'{SOURCE} 7 extra', f'{SOURCE+1} 7', f'{SOURCE} 8'):
+                event.message.text = '/resync ' + args
+                self.assertTrue(await self.bot.handle_admin_command(event))
+                self.assertTrue(self.bot.task_queue.queue.empty())
+            self.assertIn('没有转发映射', event.respond.await_args.args[0])
+            event.message.text = f'/resync {SOURCE} 7'
+            self.assertTrue(await self.bot.handle_admin_command(event))
+            self.assertIn('已加入', event.respond.await_args.args[0])
+            await self.process()
+        self.bot.client.get_messages.assert_awaited_once_with(types.InputPeerChannel(SOURCE, 10), ids=7)
+        self.bot.client.edit_message.assert_awaited_once()
+        self.assertEqual(self.bot.client.edit_message.await_args.args[1], 456)
+        self.bot.client.forward.assert_not_awaited()
+
+    async def test_delivery_copy_retries_pre_send_connection_failure_without_reserving_ids(self):
+        event = self.event(32)
+        event.get_input_chat.side_effect = [ConnectionError('offline'), types.InputPeerChannel(SOURCE, 20)]
+        await self.enqueue(event)
+        loop = asyncio.get_running_loop()
+        wake = loop.call_later
+        with patch.object(loop, 'call_later', side_effect=lambda delay, cb: wake(0, cb)):
+            self.assertEqual((await self.process()).status, app.TaskStatus.PENDING)
+        self.bot.client.forward.assert_not_awaited()
+        self.assertEqual(self.bot.monitor_message_map().copy_state(SOURCE, 32, TARGET), app.TaskStatus.PENDING)
+        await asyncio.sleep(0.01)
+        self.assertEqual((await self.process()).status, app.TaskStatus.COMPLETED)
+        self.bot.client.forward.assert_awaited_once()
+
+    async def test_delivery_media_caption_is_sent_in_real_edit_rpc_without_reupload(self):
+        from telethon import TelegramClient
+        from telethon.sessions import MemorySession
+        sent = []
+        class OfflineClient(TelegramClient):
+            async def __call__(self, request, **kwargs):
+                sent.append(request)
+                raise errors.MessageNotModifiedError(request)  # Stop at the RPC boundary; no network.
+        client = OfflineClient(MemorySession(), 123, 'test')
+        peer = types.InputPeerChannel(TARGET, 10)
+        client.get_messages = AsyncMock(return_value=NS(media=document(19)))
+        bold = types.MessageEntityBold(0, 2)
+        for caption, entities in (('新说明', [bold]), ('', [])):
+            await self.bot.edit_monitor_message(client, peer, 451, NS(media=document(19, ref=b'fresh'),
+                                                                      raw_text=caption, entities=entities))
+            request = sent[-1]
+            self.assertIsInstance(request, functions.messages.EditMessageRequest)
+            self.assertEqual((request.peer, request.id, request.message, request.entities, request.media),
+                             (peer, 451, caption, entities, None))
+            self.assertTrue(bytes(request))
+        self.assertEqual(len(sent), 2)
+
+    async def test_delivery_unreadable_source_does_not_erase_caption_or_report_success(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {6: 800})
+        self.bot.client.get_messages.return_value = types.MessageEmpty(id=6)
+        self.bot.schedule_status_delete = Mock()
+        await self.enqueue(self.event(6), edited=True)
+        with patch.object(app, 'ADMIN_IDS', [42]), self.assertLogs(app.logger, 'ERROR'):
+            self.assertEqual((await self.process()).status, app.TaskStatus.FAILED)
+        self.assertIn('源帖 6 已删除或不可读取', self.bot.client.send_message.await_args.args[1])
+        self.bot.client.edit_message.assert_not_awaited()
+        self.bot.client.forward.assert_not_awaited()
 
     async def test_malformed_session_notifies_without_secret_and_keeps_bot_running(self):
         value = 'INVALID-private-credential-TEST'

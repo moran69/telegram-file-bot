@@ -60,6 +60,8 @@ FORWARD_LOG_MAX_DAYS = 7  # 保留最近7天
 MONITOR_MAP_FILE = os.getenv("MONITOR_MAP_FILE", "").strip() or "monitor_message_map.sqlite3"
 MAX_CHANNEL_ID = 997_852_516_352  # MTProto channel/supergroup range.
 MANUAL_ALBUM_CACHE_SIZE = 500
+MONITOR_ALBUM_WAIT = 1.0  # seconds from the first grouped NewMessage
+MONITOR_EARLY_EDIT_LIMIT = 4096
 USER_MONITOR_RETRY_SECONDS = 30
 MONITOR_CLEANUP_INTERVAL = 7 * 86400
 try:
@@ -181,6 +183,8 @@ class TaskQueue:
         self._resume = asyncio.Event()
         self._resume.set()
         self.task_counter = 0
+        self._albums: dict[tuple[int, int, int], tuple[ForwardTask, asyncio.TimerHandle]] = {}
+        self._early_edits: dict[tuple[int, int, int], None] = {}
         self._retry_timers: dict[asyncio.TimerHandle, ForwardTask] = {}
         self._edits: dict[tuple[int, int, int], ForwardTask] = {}
 
@@ -223,6 +227,11 @@ class TaskQueue:
 
     def _take_pending(self) -> list[ForwardTask]:
         pending = list(self._retry_timers.values())
+        for task, timer in self._albums.values():
+            timer.cancel()
+            pending.append(task)
+        self._albums.clear()
+        self._early_edits.clear()
         for timer in self._retry_timers:
             timer.cancel()
         self._retry_timers.clear()
@@ -282,10 +291,53 @@ class TaskQueue:
                 if cancel_worker and self.running:
                     self.worker_task = asyncio.create_task(self._worker())
 
+    def note_early_edit(self, task: ForwardTask) -> None:
+        # Keep keys only, never the media or event. No copy RPC is triggered by an unmapped edit.
+        key = task.edit_key
+        self._early_edits.pop(key, None)
+        self._early_edits[key] = None
+        if len(self._early_edits) > MONITOR_EARLY_EDIT_LIMIT:
+            self._early_edits.pop(next(iter(self._early_edits)))
+
+    async def enqueue_edit(self, event, source_id: int, mid: int, target_id: int) -> Optional[int]:
+        return await self.add_task(event, f"https://t.me/c/{source_id}/{mid}", None, event.chat_id,
+                                   mode="monitor_edit", message_ids=[mid], source_chat_id=source_id,
+                                   target_chat_id=target_id)
+
+    async def reconcile_early_edits(self, task: ForwardTask, confirmed: dict[int, int]) -> None:
+        for mid in confirmed:
+            key = (task.source_chat_id, mid, task.target_chat_id)
+            if key in self._early_edits:
+                del self._early_edits[key]
+                await self.enqueue_edit(task.event, task.source_chat_id, mid, task.target_chat_id)
+
+    def _collect_album(self, task: ForwardTask, member_only: bool) -> None:
+        key = (task.source_chat_id, task.grouped_id, task.target_chat_id)
+        pending = self._albums.get(key)
+        if pending:
+            first, timer = pending
+            first.message_ids = sorted(set(first.message_ids).union(task.message_ids))
+            first.link = f"https://t.me/c/{task.source_chat_id}/{first.message_ids[0]}"
+            if member_only:
+                return
+            timer.cancel()
+            del self._albums[key]
+            task = first
+        elif member_only:
+            def flush():
+                del self._albums[key]
+                if not self.bot._stopping:
+                    self.queue.put_nowait(task)
+            timer = asyncio.get_running_loop().call_later(MONITOR_ALBUM_WAIT, flush)
+            self._albums[key] = (task, timer)
+            return
+        self.queue.put_nowait(task)
+
     async def add_task(self, event, link: str, status_msg_id: Optional[int], chat_id: int,
                        grouped_id: Optional[int] = None, mode: str = "clone",
                        message_ids: Optional[list[int]] = None, source_chat_id: Optional[int] = None,
-                       status_client: Optional[TelegramClient] = None, *, target_chat_id: int) -> Optional[int]:
+                       status_client: Optional[TelegramClient] = None, *, target_chat_id: int,
+                       album_member: bool = False) -> Optional[int]:
         if self.bot._stopping:
             return None  # The queue may already be drained and its worker gone.
         self.task_counter += 1
@@ -310,7 +362,10 @@ class TaskQueue:
                     existing.edit_dirty = True
                 return self.queue.qsize()
             self._edits[task.edit_key] = task
-        self.queue.put_nowait(task)
+        if mode == "monitor_copy" and grouped_id is not None:
+            self._collect_album(task, album_member)
+        else:
+            self.queue.put_nowait(task)
         position = self.queue.qsize()
         logger.info(f"任务已加入队列，位置: {position}, mode: {mode}")
         return position
@@ -417,7 +472,7 @@ class TaskQueue:
 
     def get_queue_status(self) -> dict:
         return {
-            "queue_size": self.queue.qsize() + len(self._retry_timers),
+            "queue_size": self.queue.qsize() + len(self._retry_timers) + len(self._albums),
             "current_task": {
                 "link": self.current_task.link[:50] if self.current_task else None,
                 "status": self.current_task.status.value if self.current_task else None
@@ -453,6 +508,8 @@ START_MESSAGE_ADMIN = (
     '  覆盖自动监听源频道列表\n'
     '/monitor clear\n'
     '  清空自动监听源频道列表\n\n'
+    '/resync <源频道裸ID> <源消息ID>\n'
+    '  补同步一条已映射消息的最新内容，不补发新帖\n\n'
     '/tdlstop\n'
     '  停止当前手动 TDL 任务，清空当时的等待队列和定时重试；不强停在途自动同步\n\n'
     '/queue\n'
@@ -1246,7 +1303,7 @@ class TelegramBot:
             return None
         return utils.resolve_id(self.target_chat_id)[0]
 
-    async def enqueue_monitor_post(self, event, messages, *, edited: bool = False) -> None:
+    async def enqueue_monitor_post(self, event, messages, *, edited: bool = False, album_member: bool = False) -> None:
         if not messages:
             return
         message = messages[0]
@@ -1257,13 +1314,20 @@ class TelegramBot:
         if target_id is None or target_id == source_id:
             logger.warning("跳过频道同步：未配置目标频道或目标就是源频道，source=%s", source_id)
             return
-        # Album 处理完整的相册；NewMessage 不单独复制相册成员。
-        ids = sorted({item.id for item in messages})
-        await self.task_queue.add_task(
-            event, f"https://t.me/c/{source_id}/{ids[0]}", None, event.chat_id,
-            mode="monitor_edit" if edited else "monitor_copy", message_ids=ids,
-            source_chat_id=source_id, target_chat_id=target_id,
-        )
+        # Only observed posts of this source may be forwarded, never inferred adjacent IDs.
+        members = {m.id: m for m in messages if m.peer_id == message.peer_id and m.grouped_id == message.grouped_id}
+        if not edited:
+            ids = sorted(members)
+            await self.task_queue.add_task(
+                event, f"https://t.me/c/{source_id}/{ids[0]}", None, event.chat_id,
+                grouped_id=message.grouped_id, album_member=album_member, mode="monitor_copy", message_ids=ids,
+                source_chat_id=source_id, target_chat_id=target_id,
+            )
+        # NewMessage can be an edited snapshot of an already mapped post. Copy dedup alone
+        # would leave its caption stale. Always read the actual latest content in the worker.
+        for mid, item in members.items():
+            if edited or getattr(item, "edit_date", None) is not None:
+                await self.task_queue.enqueue_edit(event, source_id, mid, target_id)
 
     def register_monitor_events(self, client: TelegramClient, *, fallback: bool = False) -> None:
         def selected():
@@ -1292,17 +1356,20 @@ class TelegramBot:
             raise
 
     async def monitor_source_peer(self, client, event, source_id):
-        if client is event.client:
-            return await event.get_input_chat()
+        if client is event.client and event.chat_id == utils.get_peer_id(types.PeerChannel(source_id)):
+            peer = await event.get_input_chat()
+            if peer is not None:
+                return peer
+        # A cache miss can return None. Never read a channel-scoped message ID without its peer.
         return await self.get_monitor_channel_peer(client, source_id)
 
-    async def report_monitor_copy(self, text: str, *, failed: bool = False) -> None:
+    async def report_monitor_status(self, text: str, *, failed: bool = False) -> None:
         if ADMIN_IDS:
             try:
                 status_msg = await self.client.send_message(ADMIN_IDS[0], text)
                 self.schedule_status_delete(status_msg, failed=failed)
             except Exception as exc:
-                logger.debug("发送频道复制状态失败：%s", exc)
+                logger.debug("发送频道同步状态失败：%s", exc)
 
     @staticmethod
     async def edit_monitor_message(client, target_peer, target_msg_id, current) -> None:
@@ -1352,16 +1419,15 @@ class TelegramBot:
                 async with self._monitor_db_lock:
                     target_msg_id = self.monitor_message_map().get(source_id, source_msg_id, target_id)
                 if target_msg_id is None:
-                    logger.info("跳过频道编辑（没有转发映射）：%s, target=%s", task.link, target_id)
+                    self.task_queue.note_early_edit(task)
+                    logger.info("暂不编辑（没有转发映射）：%s, target=%s；仅在收到对应复制回执后补同步", task.link, target_id)
                     task.status = TaskStatus.COMPLETED
                     return
                 # 出队后取源帖最新版本，避免较旧的编辑事件覆盖新的正文或媒体。
                 source_peer = await self.monitor_source_peer(client, event, source_id)
                 current = await client.get_messages(source_peer, ids=source_msg_id)
-                if current is None:
-                    logger.info("跳过频道编辑（源帖已不可读取）：%s", task.link)
-                    task.status = TaskStatus.COMPLETED
-                    return
+                if current is None or isinstance(current, types.MessageEmpty):
+                    raise ValueError(f"源帖 {source_msg_id} 已删除或不可读取，未修改目标消息 {target_msg_id}")
                 target_peer = await self.get_monitor_channel_peer(client, target_id)
                 await self.edit_monitor_message(client, target_peer, target_msg_id, current)
                 logger.info("已同步频道编辑：%s -> %s/%s", task.link, target_id, target_msg_id)
@@ -1381,6 +1447,14 @@ class TelegramBot:
                         if self.defer_flooded_copy(task, exc):
                             return
                         raise
+                    except (ConnectionError, TimeoutError, asyncio.TimeoutError, socket.gaierror,
+                            errors.ServerError, errors.TimedOutError) as exc:
+                        if task.retries >= 2:
+                            raise
+                        delay = 2 ** (task.retries + 1)
+                        self.task_queue.retry_later(task, delay)
+                        logger.warning("发送前解析频道失败（%s），%s 秒后重试：%s", type(exc).__name__, delay, task.link)
+                        return
                     async with self._monitor_db_lock:
                         mappings = self.monitor_message_map()
                         reserved = mappings.reserve(source_id, target_id, message_ids)
@@ -1425,18 +1499,19 @@ class TelegramBot:
                                    if mappings.copy_state(source_id, mid, target_id) != TaskStatus.COMPLETED]
                 except sqlite3.Error as exc:
                     raise CopyOutcomeUnknown("目标 ID 未能持久化，请核对后处理") from exc
+                await self.task_queue.reconcile_early_edits(task, pairs)
                 if unknown:
                     raise CopyOutcomeUnknown(f"回执不完整；以下源消息待核对，不重发：{unknown}")
                 self.forward_log.add(task.link, target_id, True)
                 logger.info("已复制频道帖子并记录映射：%s -> %s, ids=%s", task.link, target_id, pairs)
-                await self.report_monitor_copy(f"✅ 自动复制成功：{task.link} → {target_id}")
+                await self.report_monitor_status(f"✅ 自动复制成功：{task.link} → {target_id}")
             task.status = TaskStatus.COMPLETED
         except CopyOutcomeUnknown as exc:
             task.status = TaskStatus.UNCONFIRMED
             task.error_msg = str(exc)
             logger.error("自动复制待核对：%s -> %s: %s", task.link, target_id, exc)
             self.forward_log.add(task.link, target_id, False, str(exc))
-            await self.report_monitor_copy(f"⚠️ 自动复制结果待核对：{task.link} → {target_id}\n{exc}", failed=True)
+            await self.report_monitor_status(f"⚠️ 自动复制结果待核对：{task.link} → {target_id}\n{exc}", failed=True)
         except Exception as exc:
             # 编辑重试重新读取映射、最新正文和媒体引用，不执行复制请求。
             if task.mode == "monitor_edit" and task.retries < 2:
@@ -1456,7 +1531,9 @@ class TelegramBot:
             logger.error("频道同步失败（%s）：%s -> %s: %s", task.mode, task.link, target_id, exc, exc_info=True)
             if task.mode == "monitor_copy":
                 self.forward_log.add(task.link, target_id, False, str(exc))
-                await self.report_monitor_copy(f"⚠️ 自动复制失败：{task.link} → {target_id}\n{exc}", failed=True)
+                await self.report_monitor_status(f"⚠️ 自动复制失败：{task.link} → {target_id}\n{exc}", failed=True)
+            else:
+                await self.report_monitor_status(f"⚠️ 频道编辑未同步：{task.link} → {target_id}\n{exc}", failed=True)
 
     async def start_user_monitor(self) -> None:
         if not USER_MONITOR_ENABLED:
@@ -1479,8 +1556,8 @@ class TelegramBot:
         @self.user_client.on(events.NewMessage)
         async def user_monitor_handler(event):
             try:
-                if self.is_user_monitor_active() and event.message.grouped_id is None:
-                    await self.enqueue_monitor_post(event, [event.message])
+                if self.is_user_monitor_active():
+                    await self.enqueue_monitor_post(event, [event.message], album_member=event.message.grouped_id is not None)
             except Exception as e:
                 logger.error(f"用户账号监听消息处理异常: {e}", exc_info=True)
 
@@ -1650,6 +1727,30 @@ class TelegramBot:
                 f"当前目标频道 ID：{self.target_chat_id}\n\n"
                 "之后收到的有效消息会转发到该频道。"
             )
+            return True
+
+        if command == '/resync':
+            source_id = parse_monitor_chat_id(parts[1]) if len(parts) == 3 else None
+            mid = int(parts[2]) if len(parts) == 3 and re.fullmatch(r'[0-9]{1,10}', parts[2]) else 0
+            if source_id is None or not 1 <= mid < 2**31:
+                await respond("❌ 用法：/resync <源频道裸ID> <源消息ID>")
+                return True
+            target_id = self.monitor_target_channel_id()
+            if not self.has_monitor_chat_id(source_id) or not target_id or target_id == source_id:
+                await respond("❌ 请检查监听源频道与当前目标频道设置")
+                return True
+            async with self._monitor_db_lock:
+                if self._stopping:
+                    mapped = None
+                else:
+                    mapped = self.monitor_message_map().get(source_id, mid, target_id)
+            if self._stopping:
+                await respond("⏹️ 服务正在停止，未加入同步队列")
+            elif mapped is None:
+                await respond("ℹ️ 当前目标没有转发映射，未修改或补发任何消息")
+            else:
+                await self.task_queue.enqueue_edit(event, source_id, mid, target_id)
+                await respond(f"⏳ 已加入原地同步队列：{source_id}/{mid} → {target_id}/{mapped}")
             return True
 
         if command == '/showto':
@@ -1931,8 +2032,8 @@ class TelegramBot:
                     return
 
                 if self.is_monitor_post(event.message):
-                    if not self.is_user_monitor_active() and event.message.grouped_id is None:
-                        await self.enqueue_monitor_post(event, [event.message])
+                    if not self.is_user_monitor_active():
+                        await self.enqueue_monitor_post(event, [event.message], album_member=event.message.grouped_id is not None)
                     return
 
                 peer = event.message.peer_id
@@ -1964,14 +2065,14 @@ class TelegramBot:
 
     async def start(self) -> None:
         self._stopping = False
+        if not self._bot_handlers_registered:
+            self._register_bot_handlers()
+            self._bot_handlers_registered = True
         await self.client.start(bot_token=BOT_TOKEN)
         if MONITOR_MAP_RETENTION_DAYS and self._monitor_cleanup_task is None:
             self._monitor_cleanup_task = asyncio.create_task(self.monitor_cleanup_loop())
         await self.task_queue.start()
 
-        if not self._bot_handlers_registered:
-            self._register_bot_handlers()
-            self._bot_handlers_registered = True
         await self.start_user_monitor()
 
         for admin_id in ADMIN_IDS:
