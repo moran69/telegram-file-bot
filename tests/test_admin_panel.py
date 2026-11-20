@@ -38,7 +38,7 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
     def send(self, chat, text, **kw):
         mid = next(self.message_ids)
         msg = NS(id=mid, chat_id=chat, raw_text=text, out=True, buttons=kw.get('buttons'),
-                 client=self.client, edit=AsyncMock())
+                 client=self.client, edit=AsyncMock(), delete=AsyncMock())
         self.messages[mid] = msg
         return msg
 
@@ -433,3 +433,98 @@ class PrivatePanelTests(unittest.IsolatedAsyncioTestCase):
         await self.text(f'https://t.me/c/{SOURCE}/8')
         self.bot.do_forward.assert_awaited_once()
         self.assert_input_receipt(await self.reply('12345'), '已添加')
+
+    async def test_prompt_expiry_deletes_only_the_prompt_and_keeps_panel(self):
+        root = self.page
+        with patch('admin_panel.TTL', 0.02):
+            await self.click('📦 批量转发')
+            prompt = self.session.prompt
+            await asyncio.wait_for(self.session.timer, 2)
+        prompt.delete.assert_awaited_once_with()
+        root.delete.assert_not_awaited()
+        self.assertIs(root, self.page)
+        self.assertIn('过期', self.page.raw_text)
+        self.assertEqual(self.session.prompt_id, 0)
+        self.assertTrue(self.button('⬅️ 返回面板'))
+        self.assertTrue(self.bot.task_queue.queue.empty())
+
+    async def test_confirmation_timeout_restores_root_before_deleting_card(self):
+        root = self.page
+        await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+        with patch('admin_panel.TTL', 0.02):
+            await self.reply(str(TARGET+1))
+            card, confirm = self.page, self.button('确认执行')
+            await asyncio.wait_for(self.session.timer, 2)
+        self.assertIs(root, self.page)
+        card.delete.assert_awaited_once_with()
+        root.delete.assert_not_awaited()
+        self.assertTrue((await self.hit(confirm, mid=card.id)).answer.await_args.kwargs['alert'])
+        self.assertEqual(self.bot.target_chat_id, TARGET)
+
+    async def test_confirmation_timeout_without_root_keeps_current_card(self):
+        root = self.page
+        await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+        with patch('admin_panel.TTL', 0.02):
+            await self.reply(str(TARGET+1))
+            card = self.page
+            del self.messages[root.id]
+            await asyncio.wait_for(self.session.timer, 2)
+        self.assertIs(card, self.page)
+        card.delete.assert_not_awaited()
+        self.assertIn('过期', card.raw_text)
+        self.assertTrue(self.button('⬅️ 返回面板'))
+
+    async def test_used_prompt_and_retired_card_cleanup_never_targets_active_panel(self):
+        root = self.page
+        with patch.object(self.bot, 'schedule_delete', wraps=self.bot.schedule_delete) as schedule:
+            await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+            prompt = self.session.prompt
+            first_timer = self.session.timer
+            await self.reply(str(TARGET+1))
+            schedule.assert_called_once_with(prompt, 30)
+            card, wait = self.page, self.session.timer
+            await self.click('确认执行')
+            await asyncio.sleep(0)
+            self.assertTrue(first_timer.cancelled() and wait.cancelled())
+            self.assertIs(card, self.page)
+            schedule.assert_called_once_with(prompt, 30)
+            await self.text('/help')
+            schedule.assert_called_with(card, app.AUTO_DELETE_COMMAND_SECONDS)
+            self.assertNotIn(root.id, [call.args[0].id for call in schedule.call_args_list])
+            self.assertNotIn(self.page.id, [call.args[0].id for call in schedule.call_args_list])
+
+    async def test_receipt_retention_by_outcome_and_sync_override(self):
+        self.bot.monitor_message_map().remember(SOURCE, TARGET, {7: 91})
+        link = f'https://t.me/c/{SOURCE}/7'
+        with patch.object(self.bot, 'schedule_delete', wraps=self.bot.schedule_delete) as schedule:
+            for button, text, delay in [('➕ 添加', '12345', 120), ('➕ 添加', '取消', 120),
+                                        ('➕ 添加', 'invalid', 600), ('🔄 手动同步', link+'1', 600),
+                                        ('🔄 手动同步', link, 0), ('🔄 手动同步', link, 17)]:
+                with self.subTest(text=text, delay=delay), patch.object(app, 'AUTO_DELETE_SYNC_RECEIPT_SECONDS',
+                                                                        17 if delay == 17 else 0):
+                    await self.text('/start')
+                    if button == '➕ 添加':
+                        await self.click('📡 监听频道')
+                    await self.click(button)
+                    ev = await self.reply(text)
+                    receipt, actual_delay = schedule.call_args.args
+                    self.assertEqual(actual_delay, delay)
+                    self.assertEqual(receipt.raw_text, ev.respond.await_args.args[0])
+                    self.assertNotIn(receipt.id, (ev.message.id, self.page.id))
+
+    async def test_cleanup_switch_off_preserves_expiry_checks_without_any_timers(self):
+        with patch.object(app, 'AUTO_DELETE_BOT_MESSAGES', False):
+            await self.click('🎯 目标频道'); await self.click('✏️ 更换目标')
+            prompt = self.session.prompt
+            self.assertIsNone(self.session.timer)
+            await self.reply(str(TARGET+1))
+            card = self.page
+            self.assertIsNone(self.session.timer)
+            self.session.expires = 1
+            await self.click('确认执行')
+            self.assertIn('过期', self.page.raw_text)
+            self.assertEqual(self.bot.target_chat_id, TARGET)
+            await self.text('/start')
+            self.assertFalse(self.bot._delete_tasks)
+            prompt.delete.assert_not_awaited()
+            card.delete.assert_not_awaited()

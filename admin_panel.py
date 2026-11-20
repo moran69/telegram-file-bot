@@ -46,12 +46,19 @@ class Session:
     owner: int
     mid: int = 0
     choices: dict[bytes, str] = field(default_factory=dict)
-    prompt_id: int = 0
+    root_mid: int = 0  # original /start or /help; never delete this message
+    card: object = None  # a separately sent card that currently owns the keyboard
+    prompt: object = None
+    timer: asyncio.Task | None = None
     stage: str = ''
     start_link: str = ''
     command: tuple[str, ...] = ()
     guard: object = None
     expires: float = 0
+
+    @property
+    def prompt_id(self):
+        return self.prompt.id if self.prompt else 0
 
 
 class AdminPanel:
@@ -91,9 +98,62 @@ class AdminPanel:
             session = Session(uid)
             msg = await send(self.guide if guide else self.home, link_preview=False,
                              buttons=self._keyboard(session, [BACK] if guide else HOME))
-            session.mid = msg.id
+            session.root_mid = session.mid = msg.id
             if self.allowed(uid):
+                previous = self.sessions.get(uid)
+                if previous:
+                    self._retire(previous)
                 self.sessions[uid] = session
+
+    def _end_wait(self, s):
+        if s.timer:
+            s.timer.cancel()
+            s.timer = None
+        if s.prompt:
+            self.bot.schedule_delete(s.prompt, 30)
+            s.prompt = None
+
+    def _retire(self, s):
+        self._end_wait(s)
+        if s.card:
+            self.bot.schedule_command_delete(s.card)
+            s.card = None
+
+    def _arm_wait(self, s):
+        # Start after delivery so network latency does not shorten the input window.
+        s.expires = time.monotonic() + TTL
+        s.timer = self.bot.schedule_cleanup(partial(self._expire_wait, s), TTL)
+
+    async def _expire_wait(self, s):
+        async with self._lock(s.owner):
+            if self.sessions.get(s.owner) is not s or s.timer is not asyncio.current_task() or not self.allowed(s.owner):
+                return
+            s.timer = None
+            expired, s.prompt = s.prompt, None
+            text = '⌛ 操作已过期，未执行。请返回面板重新开始。'
+            try:
+                if s.command and s.card:
+                    # Restore the permanent panel before deleting the expired confirmation.
+                    card, s.mid = s.card, s.root_mid
+                    try:
+                        await self._result(s, text)
+                    except Exception:
+                        s.mid = card.id  # original panel gone: keep this card as the panel
+                        await self._result(s, text)
+                    else:
+                        s.card = None
+                        expired = card
+                else:
+                    await self._result(s, text)
+            except Exception:
+                await self._unavailable(s)
+            finally:
+                if expired:
+                    await expired.delete()
+
+    async def _error_notice(self, send, text, **kwargs):
+        msg = await send(text, **kwargs)
+        self.bot.schedule_panel_receipt(msg, 'error')
 
     @staticmethod
     def _fit(text):
@@ -121,7 +181,7 @@ class AdminPanel:
                 return
             action = s.choices[event.data]
             s.choices.clear()  # Consume this generation before any network I/O.
-            s.prompt_id = 0
+            self._end_wait(s)
             try:
                 if action == 'confirm':
                     await event.answer('已收到确认，正在核对操作…')
@@ -145,9 +205,10 @@ class AdminPanel:
 
     async def _unavailable(self, s):
         self.sessions.pop(s.owner, None)
+        self._retire(s)
         logger.exception('管理面板操作或消息更新失败')
         try:
-            await self.bot.client.send_message(s.owner, '面板未能完成反馈。请用 /start 重开并核对当前状态，不要直接重复操作。')
+            await self._error_notice(partial(self.bot.client.send_message, s.owner), '面板未能完成反馈。请用 /start 重开并核对当前状态，不要直接重复操作。')
         except Exception:
             logger.warning('无法投递面板恢复提示，旧面板已失效', exc_info=True)
 
@@ -198,7 +259,7 @@ class AdminPanel:
         return None
 
     async def _prompt(self, s, stage, *, reply_to=None):
-        s.stage, s.expires = stage, time.monotonic() + TTL
+        s.stage = stage
         await self._screen(s, '⌨️ 等待输入：请回复下方专用提示。直接发送链接仍按普通投稿处理。',
                            [[('取消并返回', 'cancel')]])
         text = PROMPT + QUESTIONS[stage] + '\n5 分钟内有效；回复「取消」可退出。'
@@ -206,7 +267,8 @@ class AdminPanel:
             text += f'\n当前目标：{s.guard}'
         prompt = await self.bot.client.send_message(s.owner, text, buttons=Button.force_reply(single_use=True),
                                                     link_preview=False, reply_to=reply_to)
-        s.prompt_id = prompt.id
+        s.prompt = prompt
+        self._arm_wait(s)
 
     async def remind_if_waiting(self, event):
         """An unthreaded, otherwise ignored text is not consent to run a panel action."""
@@ -215,7 +277,7 @@ class AdminPanel:
             return
         s = self.sessions.get(uid)
         if s and s.prompt_id and time.monotonic() < s.expires:
-            await event.respond('↩️ 这条消息没有回复到输入提示，未执行操作。请对「⌨️ 管理面板输入」那条消息点「回复」，再发送内容。',
+            await self._error_notice(event.respond, '↩️ 这条消息没有回复到输入提示，未执行操作。请对「⌨️ 管理面板输入」那条消息点「回复」，再发送内容。',
                                 reply_to=event.message.id)
 
     async def reply(self, event):
@@ -233,7 +295,7 @@ class AdminPanel:
                 original = None
             if original is None or isinstance(original, types.MessageEmpty):
                 if self.allowed(uid):
-                    await event.respond('无法识别被回复的消息，未执行或投稿。请单独发送，或重新打开面板。')
+                    await self._error_notice(event.respond, '无法识别被回复的消息，未执行或投稿。请单独发送，或重新打开面板。')
                 return True
             if not original.out or not (original.raw_text or '').startswith(PROMPT):
                 return False
@@ -244,9 +306,9 @@ class AdminPanel:
             if not self.allowed(uid):
                 return True
             if not s or s.prompt_id != reply_id:
-                await event.respond('此输入提示已失效，未执行或投稿。请使用最新面板。', reply_to=event.message.id)
+                await self._error_notice(event.respond, '此输入提示已失效，未执行或投稿。请使用最新面板。', reply_to=event.message.id)
                 return True
-            s.prompt_id = 0  # a second reply cannot consume the same prompt
+            self._end_wait(s)  # a second reply cannot consume the same prompt
             result = partial(self._input_result, s, event)
             try:
                 if time.monotonic() >= s.expires:
@@ -268,7 +330,7 @@ class AdminPanel:
     async def _submit(self, s, event, value, result):
         stage = s.stage
         if value == '取消':
-            await result('已取消。')
+            await result('已取消。', receipt_kind='command')
             return
         if stage in ('sync', 'export', 'end') and self.bot.target_chat_id != s.guard:
             await result('目标频道已改变，请重新开始。')
@@ -303,7 +365,7 @@ class AdminPanel:
             await result('❌ 输入无效，未执行或投稿。请从面板重新开始。')
 
     async def _confirm(self, s, cmd, detail, *, event=None):
-        s.command, s.guard, s.expires = cmd, self._snapshot(cmd), time.monotonic() + TTL
+        s.command, s.guard = cmd, self._snapshot(cmd)
         text = f'⚠️ 待确认 · 尚未执行\n\n{detail}\n\n请在 5 分钟内选择「确认执行」或「取消」。'
         rows = [[('确认执行', 'confirm'), ('取消', 'cancel')]]
         if event is not None:
@@ -314,16 +376,20 @@ class AdminPanel:
             except Exception:
                 logger.warning('确认卡片发送失败，尝试更新原面板', exc_info=True)
             else:
-                old_mid, s.mid = s.mid, card.id
+                old_mid = s.mid
+                self._retire(s)
+                s.card, s.mid = card, card.id
+                self._arm_wait(s)
                 try:
                     await self.bot.client.edit_message(s.owner, old_mid, '已收到输入，请使用下方确认卡片。', buttons=None)
                 except Exception:
                     logger.debug('旧面板未能更新，其按钮已失效', exc_info=True)
                 return
         await self._screen(s, text, rows)
+        self._arm_wait(s)
 
     async def _result(self, s, text, **kwargs):
-        s.command, s.stage, s.prompt_id, s.expires = (), '', 0, 0
+        s.command, s.stage, s.expires = (), '', 0
         await self._screen(s, text, [BACK])
 
     async def _confirmed_result(self, s, text, **kwargs):
@@ -334,25 +400,29 @@ class AdminPanel:
             logger.warning('确认结果未能写入面板，改发新面板', exc_info=True)
             msg = await self.bot.client.send_message(s.owner, self._fit(text), buttons=self._keyboard(s, [BACK]),
                                                      parse_mode=None, link_preview=False)
-            s.mid = msg.id
+            self._retire(s)
+            s.mid, s.card = msg.id, msg
 
-    async def _input_result(self, s, event, text, *, link_preview=False):
-        # Keep a durable receipt next to the submitted message even after navigating away.
+    async def _input_result(self, s, event, text, *, link_preview=False, receipt_kind='error'):
         try:
-            await event.respond(self._fit(text), reply_to=event.message.id, parse_mode=None, link_preview=link_preview)
+            receipt = await event.respond(self._fit(text), reply_to=event.message.id, parse_mode=None, link_preview=link_preview)
         except Exception:
             logger.warning('输入回执发送失败，尝试更新原面板', exc_info=True)
             await self._result(s, text)
             return
+        self.bot.schedule_panel_receipt(receipt, receipt_kind)
         try:
             await self._result(s, text)
         except Exception:
             self.sessions.pop(s.owner, None)
+            self._retire(s)
             logger.exception('输入回执已发送，但面板更新失败')
 
     async def _execute(self, s, event, cmd, guard, result):
         if not cmd or not self.allowed(s.owner) or self._snapshot(cmd) != guard:
             await result('配置已改变或操作已失效。未执行，请重新开始。')
             return
-        s.command, s.prompt_id, s.expires = (), 0, 0
+        s.command, s.expires = (), 0
+        if cmd[:2] == ('/monitor', 'add'):
+            result = partial(result, receipt_kind='command')
         await self.bot.run_admin_action(event, list(cmd), result, panel_feedback=True)

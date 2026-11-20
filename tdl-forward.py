@@ -101,6 +101,7 @@ def delete_delay(name: str, default: int) -> int:
 AUTO_DELETE_STATUS_SECONDS = delete_delay("AUTO_DELETE_STATUS_SECONDS", 300)
 AUTO_DELETE_COMMAND_SECONDS = delete_delay("AUTO_DELETE_COMMAND_SECONDS", 120)
 AUTO_DELETE_ERROR_SECONDS = delete_delay("AUTO_DELETE_ERROR_SECONDS", 600)
+AUTO_DELETE_SYNC_RECEIPT_SECONDS = delete_delay("AUTO_DELETE_SYNC_RECEIPT_SECONDS", 0)
 
 
 def monitor_visual_media(media) -> Optional[types.InputMediaPhoto | types.InputMediaDocument]:
@@ -1632,21 +1633,31 @@ class TelegramBot:
             except Exception as e:
                 logger.error('向管理员发送通知失败（%s）', type(e).__name__)
 
-    async def _delete_message_later(self, message, delay: int) -> None:
-        if not message or delay <= 0:
-            return
-        await asyncio.sleep(delay)
-        try:
-            await message.delete()
-        except Exception as e:
-            logger.debug(f"自动删除消息失败: {e}")
+    def schedule_cleanup(self, action, delay: int):
+        """One process-local timer, governed by the global switch and shutdown."""
+        if self._stopping or not AUTO_DELETE_BOT_MESSAGES or delay <= 0:
+            return None
 
-    def schedule_delete(self, message, delay: int) -> None:
-        if self._stopping or not AUTO_DELETE_BOT_MESSAGES or not message or delay <= 0:
-            return
-        job = asyncio.create_task(self._delete_message_later(message, delay))
+        async def later():
+            await asyncio.sleep(delay)
+            try:
+                await action()
+            except Exception:
+                logger.debug('自动清理消息失败', exc_info=True)
+
+        job = asyncio.create_task(later())
         self._delete_tasks.add(job)
         job.add_done_callback(self._delete_tasks.discard)
+        return job
+
+    def schedule_delete(self, message, delay: int) -> None:
+        if message:
+            self.schedule_cleanup(lambda: message.delete(), delay)
+
+    def schedule_panel_receipt(self, message, kind):
+        delay = {'command': AUTO_DELETE_COMMAND_SECONDS, 'error': AUTO_DELETE_ERROR_SECONDS,
+                 'sync': AUTO_DELETE_SYNC_RECEIPT_SECONDS}[kind]
+        self.schedule_delete(message, delay)
 
     def schedule_status_delete(self, message, failed: bool = False) -> None:
         delay = AUTO_DELETE_ERROR_SECONDS if failed else AUTO_DELETE_STATUS_SECONDS
@@ -2320,7 +2331,7 @@ class TelegramBot:
                     f"⏳ 已加入原地同步队列：{source_id}/{mid}\n"
                     f"🔗 查看目标帖： https://t.me/c/{target_id}/{mapped}\n"
                     "此回执表示已受理，不代表同步完成。",
-                    link_preview=False,
+                    link_preview=False, **({"receipt_kind": "sync"} if panel_feedback else {}),
                 )
             return True
 
