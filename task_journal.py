@@ -50,17 +50,18 @@ class TaskJournal:
 
     def cancel_waiters(self, current_id, timer_ids, stop_current=False):
         with self.open() as db:
-            db.execute("DELETE FROM jobs WHERE state IN ('pending','early','wait_peer') AND id IS NOT ?", (current_id,))
+            db.execute("DELETE FROM jobs WHERE state IN ('pending','early','wait_peer','wait_album') AND id IS NOT ?", (current_id,))
             db.executemany('DELETE FROM jobs WHERE id=?', [(jid,) for jid in timer_ids])
             if stop_current:
                 db.execute("DELETE FROM jobs WHERE id=? AND state='pending'", (current_id,))
                 db.execute("UPDATE jobs SET state='review' WHERE id=? AND state='sending'", (current_id,))
 
-    def reviews(self):
+    def reviews(self, before=None, limit=5):
         db = self.open()
         total = db.execute("SELECT count(*) FROM jobs WHERE state='review'").fetchone()[0]
-        recent = [json.loads(r[0]) for r in db.execute(
-            "SELECT payload FROM jobs WHERE state='review' ORDER BY id DESC LIMIT 5")]
+        where, args = (" AND id < ?", (before,)) if before is not None else ("", ())
+        recent = [dict(json.loads(payload), job_id=jid) for jid, payload in db.execute(
+            "SELECT id,payload FROM jobs WHERE state='review'" + where + " ORDER BY id DESC LIMIT ?", (*args, limit))]
         return total, recent
 
     def close(self):

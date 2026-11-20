@@ -26,7 +26,7 @@ from functools import partial
 
 from admin_panel import AdminPanel
 from task_journal import TaskJournal
-from monitor_clone import media_key, source_posts, upload_batch, publish_request, receipt_pairs
+from monitor_clone import AlbumNotReady, read_members, media_key, source_posts, upload_batch, publish_request, receipt_pairs
 
 # ─────────────────────────── Logging ───────────────────────────
 logger = logging.getLogger(__name__)
@@ -176,6 +176,7 @@ class ForwardTask:
     followup: Optional['ForwardTask'] = None
     observer: Optional[str] = None  # Account role only. Never persist a session or access hash.
     verify_edit: bool = False
+    waiting_for_album: bool = False  # transient: restored waiters re-read the source once
     delivery_recorded: bool = False
     refused_role: Optional[str] = None
 
@@ -500,12 +501,27 @@ class TaskQueue:
         if (mode in ('monitor_copy', 'monitor_edit') and event is not None and source_chat_id
                 and getattr(event, 'chat_id', None) == utils.get_peer_id(types.PeerChannel(source_chat_id))):
             observer = 'bot' if event.client is self.bot.client else 'user'
+            merged_album = False
             for jid, waiting in list(self._peer_wait.items()):
+                if waiting.waiting_for_album:
+                    if (mode != 'monitor_copy' or waiting.source_chat_id != source_chat_id
+                            or waiting.grouped_id != grouped_id or waiting.target_chat_id != target_chat_id):
+                        continue
+                    waiting.message_ids = sorted(set(waiting.message_ids).union(message_ids))
+                    waiting.event, waiting.observer = event, observer
+                    self.journal.save(waiting)
+                    waiting.waiting_for_album = False
+                    del self._peer_wait[jid]
+                    self.queue.put_nowait(waiting)
+                    merged_album = True
+                    continue
                 if waiting.source_chat_id == source_chat_id:
                     waiting.event, waiting.observer = event, observer
                     self.journal.save(waiting)
                     del self._peer_wait[jid]
                     self.queue.put_nowait(waiting)
+            if merged_album:
+                return self.queue.qsize()
         self.task_counter += 1
         task = ForwardTask(
             event=event,
@@ -1193,7 +1209,7 @@ class MonitorMessageMap:
                     removed, retention_days, time.monotonic() - started)
         return MONITOR_CLEANUP_INTERVAL
 
-    def reserve(self, source_chat_id: int, target_chat_id: int, ids: list[int]) -> dict[int, int]:
+    def reserve(self, source_chat_id: int, target_chat_id: int, ids: list[int], *, whole_album=False) -> dict[int, int]:
         """RPC 前提交意图；已有映射或未确认的意图都不能重新发送。"""
         reserved = {}
         with self.db:
@@ -1212,6 +1228,9 @@ class MonitorMessageMap:
                     reserved[mid] = nonce
                 else:
                     logger.warning("复制结果待核对，不重复发送：source=%s/%s target=%s", *key)
+            if whole_album and reserved and len(reserved) != len(ids):
+                # Roll back every new reservation instead of publishing a partial group.
+                raise ValueError('相册已有已发送或待核对成员，未拆散发送，请人工核对')
         return reserved
 
     def start_tdl_clone(self, source_id: int, mid: int, target_id: int, nonce: int) -> None:
@@ -1427,7 +1446,7 @@ class TDLDownloader:
         cmd = [
             self.tdl_path, "chat", "export",
             "-c", chat_arg,
-            "-T", "id",
+            "-T", "id", "--all",
             "-i", ids_str,
             "-o", output_file,
         ]
@@ -1962,6 +1981,20 @@ class TelegramBot:
                             return
                     try:
                         client, source_peer, target_peer = await self.monitor_route(task)
+                        if task.grouped_id is not None:
+                            posts = await read_members(client, source_peer, message_ids, task.grouped_id)
+                            task.message_ids = message_ids = [p.id for p in posts]
+                            task.link = f'https://t.me/c/{source_id}/{message_ids[0]}'
+                    except AlbumNotReady:
+                        if task.retries < 2:
+                            self.task_queue.retry_later(task, 2 ** (task.retries + 1))
+                        else:
+                            task.status = TaskStatus.PENDING
+                            task.waiting_for_album = True
+                            self.task_queue.journal.save(task, 'wait_album')
+                            self.task_queue._peer_wait[task.job_id] = task
+                            logger.warning('相册未收齐，保留任务等待同组更新：%s', task.link)
+                        return
                     except errors.FloodWaitError as exc:
                         if self.defer_flooded_copy(task, exc):
                             return
@@ -1977,7 +2010,7 @@ class TelegramBot:
                     async with self._monitor_db_lock:
                         mappings = self.monitor_message_map()
                         self.task_queue.begin_send(task)
-                        reserved = mappings.reserve(source_id, target_id, message_ids)
+                        reserved = mappings.reserve(source_id, target_id, message_ids, whole_album=task.grouped_id is not None)
                         if not reserved:
                             task.status = mappings.batch_copy_state(source_id, target_id, message_ids)
                             return
@@ -2447,7 +2480,14 @@ class TelegramBot:
             status = self.task_queue.get_queue_status()
             queue_size = status["queue_size"]
             current_task = status["current_task"]
-            review_count, recent = self.task_queue.journal.reviews()
+            before = None
+            if len(parts) != 1:
+                if (len(parts) != 2 or not re.fullmatch(r'[1-9][0-9]{0,18}', parts[1])
+                        or int(parts[1]) >= 2**63):
+                    await respond('用法：/queue 或 /queue <上一页末尾的任务 ID>')
+                    return True
+                before = int(parts[1])
+            review_count, recent = self.task_queue.journal.reviews(before, limit=6)
 
             if queue_size == 0 and not current_task and not review_count:
                 await respond("📋 转发队列为空，当前没有正在处理或等待中的任务。")
@@ -2465,10 +2505,14 @@ class TelegramBot:
                     f"来源：{current_task['link']}\n",
                 ])
             if review_count:
-                lines.append(f'\n待核对：{review_count} 项（不自动重发，最近 5 项）：\n')
-                for item in recent:
+                lines.append(f'\n待核对：共 {review_count} 项（不自动重发）：\n')
+                if not recent:
+                    lines.append('没有更早的记录。\n')
+                for item in recent[:5]:
                     detail = f" {item['message_ids']}" if item['mode'] in ('export_range', 'monitor_copy') else ''
-                    lines.append(f"{item['mode']}：{item['link']}{detail} → {item['target_chat_id']}\n")
+                    lines.append(f"#{item['job_id']} {item['mode']}：{item['link']}{detail} → {item['target_chat_id']}\n")
+                if len(recent) > 5:
+                    lines.append(f"下一页：/queue {recent[4]['job_id']}")
             await respond("".join(lines))
             return True
 

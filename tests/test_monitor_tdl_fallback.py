@@ -210,8 +210,9 @@ class RestrictedCloneTests(fixtures.MonitorHarness, unittest.IsolatedAsyncioTest
     async def test_missing_member_is_not_dropped(self):
         self.restrict(photo(3, 99))
         await self.enqueue(self.event(3, 7, album=99))
-        with self.assertLogs(app.logger, 'ERROR'):
-            self.assertEqual((await self.process()).status, app.TaskStatus.FAILED)
+        task = await self.process()
+        self.assertEqual((task.status, task.message_ids), (app.TaskStatus.PENDING, [3, 7]))
+        self.bot.client.forward.assert_not_awaited()
         self.assertFalse(self.publications())
 
     async def test_wrong_size_is_not_published(self):

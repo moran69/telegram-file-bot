@@ -35,6 +35,8 @@ class MonitorReliabilityTests(MonitorHarness, unittest.IsolatedAsyncioTestCase):
         user.forward.assert_not_awaited()
         group = self.event(8, 9, album=44)
         group.client = user
+        user.get_messages.side_effect = lambda peer, *, ids: (
+            group.messages if isinstance(ids, list) else NS(raw_text="caption", entities=None, media=None))
         await user.handlers[app.events.Album](group)
         await bot.handlers[app.events.Album](self.event(8, 9, album=44))
         await self.process(); await self.process()

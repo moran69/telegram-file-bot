@@ -43,6 +43,8 @@ class RecoveryTests(MonitorHarness, unittest.IsolatedAsyncioTestCase):
             await self.enqueue(self.event(8), edited=True)
         q = await self.reopen()
         self.assertEqual(q.queue.qsize(), 2)
+        self.bot.client.get_messages.side_effect = lambda peer, *, ids: (
+            self.event(3, 8, album=55).messages if isinstance(ids, list) else NS(raw_text='caption', entities=None, media=None))
         copy = await self.process()
         self.assertIsNone(copy.event)
         self.assertEqual((copy.message_ids, copy.target_chat_id, copy.status), ([3, 8], TARGET, app.TaskStatus.COMPLETED))

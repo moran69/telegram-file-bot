@@ -15,7 +15,11 @@ def media_key(post):
     raise ValueError('TDL 回退暂不支持该媒体类型，未降级成文字或拆散相册')
 
 
-async def source_posts(client, peer, ids, grouped_id):
+class AlbumNotReady(ValueError):
+    """The source does not yet expose all observed album members."""
+
+
+async def read_members(client, peer, ids, grouped_id):
     """Read actual grouped IDs, never infer membership from adjacent numeric IDs."""
     if not ids or len(ids) > 10 or max(ids) - min(ids) > 1000:
         raise ValueError('源消息范围异常，未发送')
@@ -26,16 +30,25 @@ async def source_posts(client, peer, ids, grouped_id):
         low, high = max(1, min(ids) - 100), max(ids) + 100
         posts = await client.get_messages(peer, ids=list(range(low, high + 1)))
         posts = [p for p in posts if p and getattr(p, 'grouped_id', None) == grouped_id]
-        if any(p.id in (low, high) for p in posts):
+        if any(p.id == high or (p.id == low and low > 1) for p in posts):
             raise ValueError('相册成员触及查询边界，未能安全确认整组，未发送')
     found = {p.id: p for p in posts if p and not isinstance(p, types.MessageEmpty)}
     if not set(ids).issubset(found):
-        raise ValueError('源消息已删除或相册成员不可读取，未发送')
+        if grouped_id is not None:
+            raise AlbumNotReady('相册成员暂不可读取，未发送')
+        raise ValueError('源消息已删除或不可读取，未发送')
     posts = [found[mid] for mid in sorted(found)]
-    if grouped_id is not None and not 2 <= len(posts) <= 10:
+    if grouped_id is not None and len(posts) < 2:
+        raise AlbumNotReady('相册成员尚未收齐，未发送')
+    if grouped_id is not None and len(posts) > 10:
         raise ValueError('相册成员不完整或数量异常，未拆散发送')
     if any(getattr(p, 'grouped_id', None) != grouped_id for p in posts):
         raise ValueError('源消息分组已变化，未发送')
+    return posts
+
+
+async def source_posts(client, peer, ids, grouped_id):
+    posts = await read_members(client, peer, ids, grouped_id)
     for post in posts:
         media_key(post)
         if media_key(post) == 'text' and not post.raw_text:
