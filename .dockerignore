@@ -3,4 +3,5 @@
 !Dockerfile
 !requirements.txt
 !tdl-forward.py
+!admin_panel.py
 !gen_telethon_session.py

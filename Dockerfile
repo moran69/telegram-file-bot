@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
-COPY tdl-forward.py gen_telethon_session.py ./
+COPY tdl-forward.py admin_panel.py gen_telethon_session.py ./
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1

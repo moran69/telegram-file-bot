@@ -21,7 +21,8 @@ source = Path(__file__).resolve().parents[1] / 'tdl-forward.py'
 spec = importlib.util.spec_from_file_location('tdl_forward', source)
 app = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = app
-spec.loader.exec_module(app)
+with patch.object(sys, 'path', [str(source.parent), *sys.path]):
+    spec.loader.exec_module(app)
 
 SOURCE, TARGET = 1012345678, 1098765432
 
@@ -1046,28 +1047,22 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await bot.stop()
 
-    async def test_chatid_suggests_only_a_usable_channel_id(self):
+    async def test_removed_chatid_is_not_a_command_or_a_monitor_filter(self):
         self.bot.task_queue.start = AsyncMock()
         await self.bot.start()
         handler = self.bot.client.handlers[events.NewMessage]
-        for peer, is_post in ((types.PeerChannel(SOURCE), True), (types.PeerChannel(SOURCE), False),
-                              (types.PeerChat(51), False), (types.PeerUser(81), False)):
-            with self.subTest(peer=peer, is_post=is_post):
-                event = self.event(20, post=is_post)
-                event.message.text, event.message.peer_id = '/chatid', peer
-                event.chat_id = utils.get_peer_id(peer)
-                event.respond, event.get_chat = AsyncMock(return_value=None), AsyncMock()
-                await handler(event)
-                event.respond.assert_awaited_once()
-                answer = event.respond.await_args.args[0]
-                self.assertIn(str(event.chat_id), answer)
-                if is_post:
-                    command = [line for line in answer.splitlines() if line.startswith('/monitor add ')]
-                    self.assertEqual(command, [f'/monitor add {SOURCE}'])
-                    self.assertEqual(app.parse_monitor_chat_id(command[0].split()[-1]), SOURCE)
-                else:
-                    self.assertNotIn('/monitor add ', answer)
-                event.get_chat.assert_not_awaited()
+        with patch.object(app, 'ADMIN_IDS', [81]):
+            for peer, is_post in ((types.PeerUser(81), False), (types.PeerChat(51), False),
+                                  (types.PeerChannel(SOURCE), True)):
+                with self.subTest(peer=peer):
+                    event = self.event(20, post=is_post)
+                    event.sender_id, event.chat_id = 81, utils.get_peer_id(peer)
+                    event.message.text, event.message.peer_id = '/chatid', peer
+                    event.respond = AsyncMock()
+                    await handler(event)
+                    event.respond.assert_not_awaited()
+                    self.assertEqual(self.bot.task_queue.queue.qsize(), int(is_post))
+        self.assertEqual((await self.process()).mode, 'monitor_copy')
 
     async def test_manual_album_with_unusable_first_member_still_accepts_next(self):
         self.bot.task_queue.start = AsyncMock()
@@ -1314,6 +1309,27 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
         task = q.get_nowait(); q.task_done()
         self.assertEqual(task.link, 'https://t.me/c/88/19')
 
+    async def test_admin_startup_and_start_share_panel_but_help_opens_guide(self):
+        self.bot.task_queue.start = AsyncMock()
+        with patch.object(app, 'ADMIN_IDS', [61]):
+            await self.bot.start()
+            self.assertEqual(self.bot.client.send_message.await_args.args, (61, app.START_MESSAGE_ADMIN))
+            self.assertEqual(len(self.bot.client.send_message.await_args.kwargs['buttons']), 4)
+            handler = self.bot.client.handlers[events.NewMessage]
+            event = self.event(1, post=False)
+            event.sender_id = 61
+            for command, expected in (('/start', app.START_MESSAGE_ADMIN), ('/help', app.HELP_MESSAGE_ADMIN)):
+                with self.subTest(command=command):
+                    event.message.text, event.respond = command, AsyncMock()
+                    await handler(event)
+                    event.respond.assert_awaited_once_with(expected, link_preview=False)
+            self.assertIn('管理面板', app.START_MESSAGE_ADMIN)
+            self.assertIn('① 先选一个接收消息的频道', app.HELP_MESSAGE_ADMIN)
+            self.assertNotEqual(app.START_MESSAGE_ADMIN, app.HELP_MESSAGE_ADMIN)
+            event.sender_id, event.respond = 62, AsyncMock()
+            await handler(event)  # /help is still admin-only.
+            event.respond.assert_not_awaited()
+
     async def test_review_command_names_and_recipients_are_exact(self):
         self.bot.task_queue.start = AsyncMock()
         self.bot.client.get_me = AsyncMock(return_value=NS(username='Example_Bot'))
@@ -1495,7 +1511,7 @@ class MonitorSyncTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.stop()
             await self.bot.start()
         self.assertEqual({k: len(v) for k, v in callbacks.items()},
-                         {events.NewMessage: 1, events.MessageEdited: 1, events.Album: 1})
+                         {events.NewMessage: 1, events.MessageEdited: 1, events.Album: 1, events.CallbackQuery: 1})
         self.bot.enqueue_monitor_post = AsyncMock()
         for fn in callbacks[events.NewMessage]:
             await fn(self.event(1))
@@ -1783,7 +1799,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_delete_delay_env_defaults_zero_and_invalid_diagnostic(self):
         with tempfile.TemporaryDirectory() as directory:
-            check = "import runpy, sys; m=runpy.run_path(sys.argv[1]); print(m['AUTO_DELETE_STATUS_SECONDS'], m['AUTO_DELETE_COMMAND_SECONDS'])"
+            check = "import runpy, sys, pathlib; sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent)); m=runpy.run_path(sys.argv[1]); print(m['AUTO_DELETE_STATUS_SECONDS'], m['AUTO_DELETE_COMMAND_SECONDS'])"
             env = dict(os.environ, AUTO_DELETE_STATUS_SECONDS=' ', AUTO_DELETE_COMMAND_SECONDS='0',
                        AUTO_DELETE_ERROR_SECONDS='600', PYTHONIOENCODING='utf-8')
             def run():
@@ -1849,6 +1865,7 @@ class HistoryTests(unittest.TestCase):
     def test_runtime_log_rotates_without_creating_files_on_import(self):
         with tempfile.TemporaryDirectory() as directory:
             script = """import logging, pathlib, runpy, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
 m = runpy.run_path(sys.argv[1]); path = pathlib.Path('bot.log'); assert not path.exists()
 m['configure_logging']()
 logger = logging.getLogger('rotation-test')

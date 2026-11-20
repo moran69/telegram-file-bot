@@ -20,6 +20,9 @@ from telethon.sessions import MemorySession, StringSession
 from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial
+
+from admin_panel import AdminPanel
 
 # ─────────────────────────── Logging ───────────────────────────
 logger = logging.getLogger(__name__)
@@ -480,62 +483,81 @@ class TaskQueue:
             "running": self.running
         }
 
-# 管理员帮助说明
-START_MESSAGE_ADMIN = (
-    '🤖 消息转发助手管理面板\n\n'
-    '【基础用法】\n'
-    '1. 直接转发频道/群消息给机器人\n'
-    '2. 发送公开或私有频道消息链接：\n'
-    '   https://t.me/channel_name/123\n'
-    '   https://t.me/c/123456789/123\n'
-    '3. 机器人会按队列克隆转发到当前目标频道\n'
-    '4. 配置 MONITOR_CHAT_IDS 后，自动复制源频道新帖并原地同步正文和说明的编辑\n\n'
-    '【管理员命令】\n'
-    '/forwardto <频道ID>\n'
-    '  设置或修改目标频道，可使用频道裸 ID 或 Telegram 标记后的频道 ID\n'
-    '  示例：/forwardto 1234567890\n\n'
-    '/showto\n'
-    '  查看当前目标频道 ID\n\n'
-    '/chatid\n'
-    '  查看当前聊天/频道 ID，用于配置监听源频道\n\n'
-    '/monitor\n'
-    '  查看当前自动监听的源频道 ID 列表\n'
-    '/monitor add <频道ID>\n'
-    '  添加自动监听源频道\n'
-    '/monitor del <频道ID>\n'
-    '  删除自动监听源频道\n'
-    '/monitor set <频道ID1,频道ID2>\n'
-    '  覆盖自动监听源频道列表\n'
-    '/monitor clear\n'
-    '  清空自动监听源频道列表\n\n'
-    '/resync <源频道消息链接> 或 /resync <源频道裸ID> <源消息ID>\n'
-    '  补同步一条已映射消息的最新内容，不补发新帖\n\n'
-    '/tdlstop\n'
-    '  停止当前手动 TDL 任务，清空当时的等待队列和定时重试；不强停在途自动同步\n\n'
-    '/queue\n'
-    '  查看当前等待中的转发任务数量\n\n'
-    '/flog\n'
-    '  查看最近 10 条转发记录和失败原因\n\n'
-    '/flog clear\n'
-    '  清空本地转发记录文件\n\n'
-    '/export_range <来源> <起始消息ID> <结束消息ID>\n'
-    '  从指定 Chat 导出一段消息并转发到目标频道\n'
-    '  来源支持裸 Chat ID、t.me/c 频道链接或消息链接\n'
-    '  示例：/export_range 3482276715 100 200\n'
-    '  示例：/export_range https://t.me/c/3482276715 100 200\n'
-    '  示例：/export_range https://t.me/c/3482276715/100 https://t.me/c/3482276715/200\n\n'
-    '/restart\n'
-    '  重启机器人进程\n\n'
-    '/help\n'
-    '  显示本帮助\n\n'
-    '【注意事项】\n'
-    '- 目标频道必须先用 /forwardto 设置，或通过 FORWARD_TO_CHAT_ID 环境变量配置\n'
-    '- 自动监听源频道通过 MONITOR_CHAT_IDS 环境变量配置，只填写裸 ID，不要加 -100 前缀，多个频道用英文逗号分隔\n'
-    '- 用户账号监听通过 USER_SESSION_STRING 或 USER_SESSION_FILE 启用；该用户账号需要加入源频道\n'
-    '- /monitor 子命令只修改当前运行中的内存配置；容器重启后仍以环境变量为准\n'
-    '- 机器人和 tdl 登录账号需要有源频道读取权限、目标频道发帖权限\n'
-    '- export_range 适合批量补发，消息 ID 范围不宜一次过大'
-)
+# 管理员启动通知和 /start 使用速查面板；/help 使用分步向导。
+START_MESSAGE_ADMIN = """🤖 消息转发助手 · 管理面板
+
+转发一条消息：把原消息或消息链接发给我。
+持续同步频道：添加监听后，新帖会自动复制；原帖修改后，会更新已关联的目标帖，不另发一条。
+
+🎯 转发到哪里？
+/showto — 查看当前目标频道
+/forwardto 1234567890 — 设置目标频道
+
+📡 监听哪些频道？
+/monitor — 查看监听列表
+/monitor add 9876543210 — 添加频道
+/monitor del 9876543210 — 移除频道
+/monitor set 9876543210,8765432109 — 替换整个列表
+/monitor clear — 清空监听列表
+
+🔄 目标帖没有跟着更新？
+发送源帖链接，重新同步这一条：
+/resync https://t.me/c/9876543210/42
+也可使用：/resync 9876543210 42
+只更新已关联的目标帖，不会重复发帖。
+
+📦 批量转发
+/export_range 9876543210 100 200
+将源频道中消息 ID 从 100 到 200 的帖子转发到当前目标频道。
+
+🛠 任务与维护
+/queue — 查看等待中的任务
+/tdlstop — 停止当前手动转发，清空等待任务和定时重试；已开始的自动同步不强停
+/flog — 查看最近 10 条转发记录及失败原因
+/flog clear — 清空本地记录，不删除频道消息
+/restart — 重启机器人
+/help — 查看分步使用向导
+
+💡 监听源请填裸 ID，不加 -100。通过 /monitor 修改的列表仅本次运行有效；要在重启后保留，请写入 MONITOR_CHAT_IDS。"""
+
+HELP_MESSAGE_ADMIN = """👋 欢迎使用消息转发助手
+
+① 先选一个接收消息的频道
+发送 /showto 查看当前目标。还没设置？例如：
+/forwardto 1234567890
+
+② 试着转发一条消息
+把频道原帖转发给我，或直接发送消息链接：
+https://t.me/channel_name/42
+我会把它加入队列，转发到你选好的目标频道。
+
+③ 想让源频道以后自动同步？
+假设源帖链接是 https://t.me/c/9876543210/42
+其中 9876543210 是源频道裸 ID，42 是消息 ID。
+发送：/monitor add 9876543210
+
+以后该频道发新帖时会自动复制；正文、媒体说明或支持的图片和视频有修改时，会更新原来的目标帖。
+
+④ 有一条已经转发，但内容没更新？
+发送：/resync https://t.me/c/9876543210/42
+也可以发：/resync 9876543210 42
+机器人只更新有对应记录的目标帖，不会另发一份。
+
+⑤ 想一次转发多条历史消息？
+发送：/export_range 9876543210 100 200
+最后两个数字是起始和结束消息 ID，不是转发数量。
+
+📋 用到时再查
+/monitor — 查看监听列表
+/monitor del <裸ID> — 移除一个监听源
+/monitor set <ID1,ID2> — 替换整个监听列表
+/monitor clear — 清空监听列表
+/queue — 查看等待任务
+/tdlstop — 停止手动任务并清空排队、重试，不强停正在执行的自动同步
+/flog · /flog clear — 查看最近 10 条记录 · 清空本地记录
+/restart · /start — 重启机器人 · 返回管理面板
+
+💡 重启后仍要监听？请把源频道裸 ID 写入 MONITOR_CHAT_IDS，多个 ID 用英文逗号分隔。"""
 
 
 # ─────────────────────────── Helpers ───────────────────────────
@@ -628,6 +650,11 @@ def parse_monitor_chat_id(text: str) -> Optional[int]:
         return None
     chat_id = int(value)
     return chat_id if 1 <= chat_id <= MAX_CHANNEL_ID else None
+
+
+def parse_monitor_list(raw: str) -> Optional[list[int]]:
+    ids = [parse_monitor_chat_id(item) for item in raw.replace('，', ',').split(',')]
+    return None if None in ids else list(dict.fromkeys(ids))
 
 
 def parse_chat_ids(raw: str) -> list[int]:
@@ -1169,6 +1196,11 @@ class TelegramBot:
         self._monitor_message_map: Optional[MonitorMessageMap] = None
         self._monitor_cleanup_task: Optional[asyncio.Task] = None
         self.task_queue = TaskQueue(self)
+        self.admin_panel = AdminPanel(self, allowed=lambda uid: not self._stopping and uid in ADMIN_IDS,
+                                      home=START_MESSAGE_ADMIN, guide=HELP_MESSAGE_ADMIN,
+                                      target_id=parse_chat_id, source_id=parse_monitor_chat_id,
+                                      source_list=parse_monitor_list, post_link=parse_private_channel_link,
+                                      export_range=parse_export_range_args)
 
     # ── Link utilities ──────────────────────────────────────────
 
@@ -1200,18 +1232,6 @@ class TelegramBot:
     @staticmethod
     def normalize_source_chat_id(chat_id: int) -> int:
         return utils.resolve_id(chat_id)[0]
-
-    @staticmethod
-    def format_chat_id(event) -> str:
-        peer = event.message.peer_id
-        chat_id = event.chat_id
-        if chat_id is None:
-            return "无法获取当前聊天 ID"
-        text = f"🆔 当前聊天/频道 ID：{chat_id}"
-        # Only broadcast posts can be monitored. Telethon also uses PeerChannel for megagroups.
-        if isinstance(peer, types.PeerChannel) and event.message.post:
-            text += f"\n频道裸 ID：{peer.channel_id}\n\n可用以下命令添加监听：\n/monitor add {peer.channel_id}"
-        return text
 
     def is_monitor_post(self, message) -> bool:
         return (
@@ -1676,6 +1696,12 @@ class TelegramBot:
             self._bot_username = (getattr(me, 'username', None) or '').lower() or None
         return username.lower() == self._bot_username
 
+    async def show_admin_page(self, event, *, guide=False):
+        if event.chat_id == event.sender_id and event.sender_id in ADMIN_IDS:
+            await self.admin_panel.open(event.sender_id, event.respond, guide=guide)
+        else:  # /start and /help in groups retain plain text; never attach management buttons.
+            await event.respond(HELP_MESSAGE_ADMIN if guide else START_MESSAGE_ADMIN, link_preview=False)
+
     async def handle_admin_command(self, event, *, command: Optional[str] = None) -> bool:
         if event.sender_id not in ADMIN_IDS:
             return False
@@ -1684,10 +1710,10 @@ class TelegramBot:
         parts = raw.split()
         if not parts:
             return False
-        command = command or parts[0].lower()
+        parts[0] = command or parts[0].lower()
 
-        if command == '/help':
-            await event.respond(START_MESSAGE_ADMIN)
+        if parts[0] == '/help':
+            await self.show_admin_page(event, guide=True)
             return True
 
         async def respond(text, **kwargs):
@@ -1695,6 +1721,13 @@ class TelegramBot:
             self.schedule_command_delete(message)
             return message
 
+        return await self.run_admin_action(event, parts, respond)
+
+    async def run_admin_action(self, event, parts, respond, *, panel_feedback=False) -> bool:
+        """Shared authorization and execution for typed commands and private panel actions."""
+        if self._stopping or event.sender_id not in ADMIN_IDS:
+            return False
+        command = parts[0]
         if command in ('/restart', '/tdlstop') and len(parts) != 1:
             await respond(f"❌ {command} 不接受其他参数，未执行")
             return True
@@ -1831,12 +1864,11 @@ class TelegramBot:
                         "示例：/monitor set 1234567890,9876543210"
                     )
                     return True
-                items = " ".join(parts[2:]).replace('，', ',').split(',')
-                ids = [parse_monitor_chat_id(item) for item in items]
-                if None in ids:
+                ids = parse_monitor_list(" ".join(parts[2:]))
+                if ids is None:
                     await respond("❌ 列表中有空项或无效频道 ID，原监听列表未更改。请用逗号分隔裸频道 ID。")
                     return True
-                self.monitor_chat_ids = list(dict.fromkeys(ids))
+                self.monitor_chat_ids = ids
                 await respond(f"✅ 已覆盖自动监听源频道列表\n\n{self.format_monitor_chat_ids()}")
                 return True
 
@@ -1959,6 +1991,8 @@ class TelegramBot:
             )
             if position is None:
                 await edit_status(status_msg, "⏹️ 服务正在停止，范围导出未入队")
+                if panel_feedback:
+                    await respond("⏹️ 服务正在停止，范围导出未入队")
                 return True
             await edit_status(status_msg,
                 f"⏳ 已加入范围导出队列\n"
@@ -1967,6 +2001,8 @@ class TelegramBot:
                 f"范围: {start_id}-{end_id}\n"
                 f"TO: {target_id}"
             )
+            if panel_feedback:
+                await respond(f"⏳ 范围任务已入队：{chat_id}/{start_id} 至 {end_id} → {target_id}。进度可在任务队列查看。")
             return True
 
         return False
@@ -1976,6 +2012,7 @@ class TelegramBot:
     def begin_shutdown(self) -> None:
         # Close admissions even while the listener is still unwinding its connection.
         self._stopping = True
+        self.admin_panel.sessions.clear()
 
     async def _restart(self) -> None:
         self.begin_shutdown()
@@ -2013,6 +2050,8 @@ class TelegramBot:
             await asyncio.sleep(delay)
 
     def _register_bot_handlers(self) -> None:
+        self.client.on(events.CallbackQuery)(self.admin_panel.callback)
+
         @self.client.on(events.NewMessage)
         async def message_handler(event):
             if self._stopping:
@@ -2025,17 +2064,6 @@ class TelegramBot:
                     f"post={getattr(event.message, 'post', None)}"
                 )
 
-                # Forward headers and broadcast posts are data, even if the caption is an admin command.
-                forwarded = bool(event.message.forward)
-                parts = text.split(maxsplit=1)
-                match = (re.fullmatch(r"(/[A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?", parts[0])
-                         if parts and not forwarded and not event.out else None)
-                command = match[1].lower() if match else None
-                if command == '/chatid' and await self.command_is_for_me(match[2]):
-                    msg = await event.respond(self.format_chat_id(event))
-                    self.schedule_command_delete(msg)
-                    return
-
                 if self.is_monitor_post(event.message):
                     if not self.is_user_monitor_active():
                         await self.enqueue_monitor_post(event, [event.message], album_member=event.message.grouped_id is not None)
@@ -2045,12 +2073,20 @@ class TelegramBot:
                 if event.out or (isinstance(peer, types.PeerChannel) and
                                  (event.message.post or peer.channel_id == self.monitor_target_channel_id())):
                     return
+                if await self.admin_panel.reply(event):
+                    return  # A reply to our input prompt must never fall through to manual forwarding.
+                # Forward headers and broadcast posts are data, even if the caption is an admin command.
+                forwarded = bool(event.message.forward)
+                parts = text.split(maxsplit=1)
+                match = (re.fullmatch(r"(/[A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?", parts[0])
+                         if parts and not forwarded and not event.out else None)
+                command = match[1].lower() if match else None
                 if command:
                     if not await self.command_is_for_me(match[2]):
                         return
                     if command == '/start':
                         if event.sender_id in ADMIN_IDS:
-                            await event.respond(START_MESSAGE_ADMIN)
+                            await self.show_admin_page(event)
                         elif can_submit(event.sender_id):
                             await event.respond("🤖 你可以转发消息或发送 Telegram 消息链接。")
                         else:
@@ -2082,7 +2118,7 @@ class TelegramBot:
 
         for admin_id in ADMIN_IDS:
             try:
-                await self.client.send_message(admin_id, START_MESSAGE_ADMIN)
+                await self.admin_panel.open(admin_id, partial(self.client.send_message, admin_id))
                 logger.info(f"已向管理员 {admin_id} 发送启动消息")
             except Exception as e:
                 logger.error(f"向管理员 {admin_id} 发送启动消息失败: {e}")
